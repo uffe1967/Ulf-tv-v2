@@ -1,12 +1,20 @@
 package se.ulf.tv
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
-import java.net.*
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URL
+import java.net.URLDecoder
 import kotlin.math.min
 
 enum class MediaType(val label: String) {
@@ -47,9 +55,13 @@ object CoverImageCache {
     var epoch: Int = 1
     private val cache = LruCache<String, ImageBitmap>(36)
 
-    fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get("${epoch}_$key") }
+    fun get(key: String): ImageBitmap? = synchronized(cache) {
+        cache.get("${epoch}_$key")
+    }
 
-    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) { cache.put("${epoch}_$key", bmp) }
+    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) {
+        cache.put("${epoch}_$key", bmp)
+    }
 
     fun clearAndBump() = synchronized(cache) {
         epoch += 1
@@ -60,15 +72,18 @@ object CoverImageCache {
 fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
     if (urlString.isBlank()) return null
     val cleanUrl = urlString.trim()
-    if (!cleanUrl.startsWith("http://", true) && !cleanUrl.startsWith("https://", true)) return null
+    if (!cleanUrl.startsWith("http://", true) && !cleanUrl.startsWith("https://", true)) {
+        return null
+    }
     return try {
         val conn = (URL(cleanUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 3500
             readTimeout = 4500
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.4")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.5")
         }
-        if (conn.responseCode !in 200..299) {
+        val code = conn.responseCode
+        if (code !in 200..299) {
             conn.disconnect()
             return null
         }
@@ -77,11 +92,11 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
             val buf = ByteArray(4096)
             var total = 0
             while (true) {
-                val r = input.read(buf)
-                if (r == -1) break
-                total += r
+                val read = input.read(buf)
+                if (read == -1) break
+                total += read
                 if (total > 1_500_000) return null
-                out.write(buf, 0, r)
+                out.write(buf, 0, read)
             }
             out.toByteArray()
         }
@@ -93,7 +108,9 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         var sample = 1
-        while (bounds.outWidth / sample > maxDim || bounds.outHeight / sample > maxDim) sample *= 2
+        while (bounds.outWidth / sample > maxDim || bounds.outHeight / sample > maxDim) {
+            sample *= 2
+        }
 
         BitmapFactory.decodeByteArray(
             bytes,
@@ -101,7 +118,7 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
             bytes.size,
             BitmapFactory.Options().apply {
                 inSampleSize = sample
-                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
         )?.asImageBitmap()
     } catch (_: Exception) {
@@ -325,7 +342,7 @@ fun fetchText(urlString: String): String {
         connectTimeout = 12000
         readTimeout = 25000
         instanceFollowRedirects = true
-        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.4")
+        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.5")
     }
     return try {
         val code = conn.responseCode
@@ -380,10 +397,7 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
                 val icon = o.optString("stream_icon", "").ifBlank { o.optString("cover", "") }.trim()
                 val streamUrl = when (type) {
                     MediaType.LIVE -> "$base/live/$cleanUser/$cleanPass/$id.$extLive"
-                    MediaType.MOVIE -> {
-                        val ext = o.optString("container_extension", extFallback).ifBlank { extFallback }
-                        "$base/movie/$cleanUser/$cleanPass/$id.$ext"
-                    }
+                    MediaType.MOVIE -> "$base/movie/$cleanUser/$cleanPass/$id.${o.optString("container_extension", extFallback).ifBlank { extFallback }}"
                     MediaType.SERIES -> "$base/series/$cleanUser/$cleanPass/$id.$extFallback"
                 }
                 list.add(
@@ -406,9 +420,140 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
         return list
     }
 
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams", MediaType.LIVE, "stream_id", "m3u8"))
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams", MediaType.MOVIE, "stream_id", "mp4"))
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series", MediaType.SERIES, "series_id", "mp4"))
+    result.addAll(
+        parseJsonArraySafe(
+            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams",
+            MediaType.LIVE,
+            "stream_id",
+            "m3u8"
+        )
+    )
+    result.addAll(
+        parseJsonArraySafe(
+            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams",
+            MediaType.MOVIE,
+            "stream_id",
+            "mp4"
+        )
+    )
+    result.addAll(
+        parseJsonArraySafe(
+            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series",
+            MediaType.SERIES,
+            "series_id",
+            "mp4"
+        )
+    )
 
     if (result.isEmpty()) {
-        val m3uUrl = "$base/
+        val m3uUrl = "$base/get.php?username=$cleanUser&password=$cleanPass&type=m3u_plus&output=${if (format == "MPEG-TS") "ts" else "m3u8"}"
+        return parseM3u(fetchText(m3uUrl), format)
+    }
+
+    return result
+}
+
+fun parseM3u(content: String, format: String): List<MediaEntry> {
+    if (content.isBlank()) return emptyList()
+    val result = mutableListOf<MediaEntry>()
+    var name = "Okänd"
+    var group = "Övrigt"
+    var logo = ""
+    val gReg = Regex("""group-title=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+    val lReg = Regex("""tvg-logo=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+
+    for (raw in content.lineSequence()) {
+        if (result.size >= 450) break
+        val line = raw.trim()
+        if (line.isEmpty()) continue
+        if (line.startsWith("#EXTINF", true)) {
+            group = gReg.find(line)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { "Övrigt" } ?: "Övrigt"
+            logo = lReg.find(line)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            val comma = line.lastIndexOf(',')
+            name = if (comma != -1 && comma + 1 < line.length) {
+                line.substring(comma + 1).trim().ifBlank { "Okänd" }
+            } else {
+                "Okänd"
+            }
+        } else if (!line.startsWith("#")) {
+            if (!line.startsWith("http://", true) && !line.startsWith("https://", true) && !line.startsWith("rtmp://", true)) {
+                continue
+            }
+            val lg = group.lowercase()
+            val lu = line.lowercase()
+            val type = when {
+                lg.contains("serie") || lu.contains("/series/") -> MediaType.SERIES
+                lg.contains("film") || lg.contains("movie") || lg.contains("vod") || lu.contains("/movie/") -> MediaType.MOVIE
+                else -> MediaType.LIVE
+            }
+            val (c, g) = extractCountryAndSubcategory(group, name)
+            val idx = result.size
+            result.add(
+                MediaEntry(
+                    id = "${idx}_${name.hashCode()}",
+                    title = name,
+                    country = c,
+                    genre = g,
+                    url = if (type == MediaType.LIVE) applyStreamFormat(line, format) else line,
+                    type = type,
+                    isAdult = detectAdultContent(name, group),
+                    imageUrl = logo,
+                    is4K = is4KTitle(name, group, g),
+                    orderIndex = idx
+                )
+            )
+            name = "Okänd"
+            group = "Övrigt"
+            logo = ""
+        }
+    }
+    return result
+}
+
+fun extractCountryAndSubcategory(rawGroup: String, itemTitle: String): Pair<String, String> {
+    val cleaned = rawGroup.trim()
+    val u = cleaned.uppercase()
+    val titleUpper = itemTitle.uppercase()
+
+    val country = when {
+        u.startsWith("SE") || u.contains("SWED") || u.contains("SVERIGE") || titleUpper.startsWith("SE ") -> "Sverige"
+        u.startsWith("NO") || u.contains("NORW") || u.contains("NORGE") || titleUpper.startsWith("NO ") -> "Norge"
+        u.startsWith("DK") || u.contains("DENM") || u.contains("DANMARK") || titleUpper.startsWith("DK ") -> "Danmark"
+        u.startsWith("FI") || u.contains("FINL") || titleUpper.startsWith("FI ") -> "Finland"
+        u.startsWith("UK") || u.startsWith("GB") || titleUpper.startsWith("UK ") -> "UK"
+        u.startsWith("US") || u.contains("USA") || titleUpper.startsWith("US ") -> "USA"
+        u.startsWith("DE") || u.contains("GERM") || u.contains("TYSK") || titleUpper.startsWith("DE ") -> "Tyskland"
+        else -> {
+            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size == 2 && parts[0].length in 2..12) parts[0] else "Internationellt"
+        }
+    }
+
+    val combined = "$cleaned $itemTitle".lowercase()
+    val sub = when {
+        combined.contains("sport") || combined.contains("viaplay") || combined.contains("eurosport") || combined.contains("fotboll") || combined.contains("hockey") -> "Sport"
+        combined.contains("news") || combined.contains("nyheter") || combined.contains("cnn") || combined.contains("bbc") || combined.contains("svt") -> "Nyheter"
+        combined.contains("music") || combined.contains("musik") || combined.contains("mtv") || combined.contains("radio") -> "Musik"
+        combined.contains("film") || combined.contains("movie") || combined.contains("cinema") || combined.contains("hbo") -> "Film"
+        combined.contains("kids") || combined.contains("barn") || combined.contains("disney") || combined.contains("cartoon") -> "Barn"
+        combined.contains("doc") || combined.contains("dokumentär") || combined.contains("natgeo") || combined.contains("discovery") -> "Dokumentär"
+        combined.contains("serie") || combined.contains("drama") -> "Serier"
+        else -> {
+            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size == 2 && parts[0].length in 2..12) parts[1] else cleaned.ifBlank { "Allmänt" }
+        }
+    }
+
+    return country to sub
+}
+
+fun demoCatalog(): List<MediaEntry> = listOf(
+    MediaEntry("1", "Obsidian Originals: Sintel 4K", "Internationellt", "4K • Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/Sintel.jpg", is4K = true, orderIndex = 0),
+    MediaEntry("2", "Big Buck Bunny", "Internationellt", "Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg", is4K = false, orderIndex = 1),
+    MediaEntry("3", "Tears of Steel 4K", "Internationellt", "Sci-Fi", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/TearsOfSteel.jpg", is4K = true, orderIndex = 2),
+    MediaEntry("4", "Elephants Dream", "Sverige", "Drama", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ElephantsDream.jpg", is4K = false, orderIndex = 3),
+    MediaEntry("5", "Nordic Chronicles", "Sverige", "Thriller", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerBlazes.jpg", is4K = true, orderIndex = 4),
+    MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
+    MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
+    MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
+)

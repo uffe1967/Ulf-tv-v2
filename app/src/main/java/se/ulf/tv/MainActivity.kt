@@ -370,7 +370,7 @@ fun parseM3u(content: String): List<Channel> {
         val line = rawLine.trim()
         if (line.isEmpty()) continue
         if (line.startsWith("#EXTINF", ignoreCase = true)) {
-            val groupMatch = Regex("group-title="([^"]+)"").find(line)
+            val groupMatch = Regex("group-title=\"([^\"]+)\"").find(line)
             currentGroup = groupMatch?.groupValues?.getOrNull(1)?.ifBlank { "Övrigt" } ?: "Övrigt"
             val commaIndex = line.lastIndexOf(',')
             currentName = if (commaIndex != -1 && commaIndex + 1 < line.length) {

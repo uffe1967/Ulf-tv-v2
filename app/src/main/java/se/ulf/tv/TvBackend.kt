@@ -424,7 +424,7 @@ fun parseM3uFromUrl(
         var logo = ""
         val maxTotal = 150_000
 
-        conn.inputStream.bufferedReader(Charsets.UTF_8, 65536).use { reader ->
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
             var rawLine = reader.readLine()
             while (rawLine != null && result.size < maxTotal) {
                 val line = rawLine.removePrefix("\uFEFF").trim()
@@ -479,4 +479,162 @@ fun parseM3uFromUrl(
 }
 
 fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
-    val
+    val base = server.trim().trimEnd('/')
+    val cleanUser = user.trim()
+    val cleanPass = pass.trim()
+    val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
+    val result = ArrayList<MediaEntry>(8192)
+    val maxTotal = 150_000
+
+    fun parseJsonArraySafe(url: String, type: MediaType, idKey: String, extFallback: String): List<MediaEntry> {
+        val list = ArrayList<MediaEntry>(2048)
+        val raw = fetchText(url)
+        val start = raw.indexOf('[')
+        if (start == -1) return emptyList()
+        val arr = JSONArray(raw.substring(start))
+        val remaining = (maxTotal - result.size).coerceAtLeast(0)
+        val count = min(arr.length(), remaining)
+        for (i in 0 until count) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString(idKey).ifBlank { o.optString("stream_id") }
+            if (id.isBlank()) continue
+            val name = o.optString("name", o.optString("title", "Kanal")).trim().ifBlank { "Kanal" }
+            val rawCat = o.optString("category_name", o.optString("genre", name))
+            val (c, g) = extractCountryAndSubcategory(rawCat, name)
+            val icon = o.optString("stream_icon", "").ifBlank { o.optString("cover", "") }.trim()
+            val streamUrl = when (type) {
+                MediaType.LIVE -> "$base/live/$cleanUser/$cleanPass/$id.$extLive"
+                MediaType.MOVIE -> "$base/movie/$cleanUser/$cleanPass/$id.${o.optString("container_extension", extFallback).ifBlank { extFallback }}"
+                MediaType.SERIES -> "$base/series/$cleanUser/$cleanPass/$id.$extFallback"
+            }
+            list.add(
+                MediaEntry(
+                    id = "${type.name}_${i}_$id",
+                    title = name,
+                    country = c,
+                    genre = g,
+                    url = streamUrl,
+                    type = type,
+                    isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name, rawCat),
+                    imageUrl = icon,
+                    is4K = is4KTitle(name, rawCat, g),
+                    orderIndex = i
+                )
+            )
+        }
+        return list
+    }
+
+    runCatching { result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams", MediaType.LIVE, "stream_id", "m3u8")) }
+    runCatching { result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams", MediaType.MOVIE, "stream_id", "mp4")) }
+    runCatching { result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series", MediaType.SERIES, "series_id", "mp4")) }
+
+    if (result.isEmpty()) {
+        val m3uUrl = "$base/get.php?username=$cleanUser&password=$cleanPass&type=m3u_plus&output=${if (format == "MPEG-TS") "ts" else "m3u8"}"
+        return parseM3uFromUrl(m3uUrl, format)
+    }
+
+    return result
+}
+
+fun extractCountryAndSubcategory(rawGroup: String, itemTitle: String): Pair<String, String> {
+    val cleaned = rawGroup.trim()
+    val u = cleaned.uppercase()
+    val titleUpper = itemTitle.uppercase()
+
+    val country = when {
+        u.startsWith("SE") || u.contains("SWED") || u.contains("SVERIGE") || titleUpper.startsWith("SE ") -> "Sverige"
+        u.startsWith("NO") || u.contains("NORW") || u.contains("NORGE") || titleUpper.startsWith("NO ") -> "Norge"
+        u.startsWith("DK") || u.contains("DENM") || u.contains("DANMARK") || titleUpper.startsWith("DK ") -> "Danmark"
+        u.startsWith("FI") || u.contains("FINL") || titleUpper.startsWith("FI ") -> "Finland"
+        u.startsWith("UK") || u.startsWith("GB") || titleUpper.startsWith("UK ") -> "UK"
+        u.startsWith("US") || u.contains("USA") || titleUpper.startsWith("US ") -> "USA"
+        u.startsWith("DE") || u.contains("GERM") || u.contains("TYSK") || titleUpper.startsWith("DE ") -> "Tyskland"
+        else -> {
+            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size == 2 && parts[0].length in 2..12) parts[0] else "Internationellt"
+        }
+    }
+
+    val combined = "$cleaned $itemTitle".lowercase()
+    val sub = when {
+        combined.contains("sport") || combined.contains("viaplay") || combined.contains("eurosport") || combined.contains("fotboll") || combined.contains("hockey") -> "Sport"
+        combined.contains("news") || combined.contains("nyheter") || combined.contains("cnn") || combined.contains("bbc") || combined.contains("svt") -> "Nyheter"
+        combined.contains("music") || combined.contains("musik") || combined.contains("mtv") || combined.contains("radio") -> "Musik"
+        combined.contains("film") || combined.contains("movie") || combined.contains("cinema") || combined.contains("hbo") -> "Film"
+        combined.contains("kids") || combined.contains("barn") || combined.contains("disney") || combined.contains("cartoon") -> "Barn"
+        combined.contains("doc") || combined.contains("dokumentär") || combined.contains("natgeo") || combined.contains("discovery") -> "Dokumentär"
+        combined.contains("serie") || combined.contains("drama") -> "Serier"
+        else -> {
+            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size == 2 && parts[0].length in 2..12) parts[1] else cleaned.ifBlank { "Allmänt" }
+        }
+    }
+
+    return country to sub
+}
+
+private fun cleanField(s: String): String = s.replace("\t", " ").replace("\n", " ").replace("\r", " ")
+
+fun saveCatalogCache(context: Context, items: List<MediaEntry>) {
+    try {
+        val file = File(context.filesDir, "obsidian_catalog.tsv")
+        file.bufferedWriter(Charsets.UTF_8).use { out ->
+            for (it in items) {
+                out.write(
+                    "${cleanField(it.id)}\t${cleanField(it.title)}\t${cleanField(it.country)}\t" +
+                    "${cleanField(it.genre)}\t${cleanField(it.url)}\t${it.type.name}\t" +
+                    "${if (it.isAdult) "1" else "0"}\t${cleanField(it.imageUrl)}\t" +
+                    "${if (it.is4K) "1" else "0"}\t${it.orderIndex}\n"
+                )
+            }
+        }
+    } catch (_: Exception) {
+    }
+}
+
+fun loadCatalogCache(context: Context): List<MediaEntry> {
+    val file = File(context.filesDir, "obsidian_catalog.tsv")
+    if (!file.exists()) return emptyList()
+    val result = ArrayList<MediaEntry>(8192)
+    return try {
+        file.bufferedReader(Charsets.UTF_8).use { reader ->
+            var line = reader.readLine()
+            while (line != null) {
+                val p = line.split('\t')
+                if (p.size >= 10) {
+                    val type = runCatching { MediaType.valueOf(p[5]) }.getOrDefault(MediaType.LIVE)
+                    result.add(
+                        MediaEntry(
+                            id = p[0],
+                            title = p[1],
+                            country = p[2],
+                            genre = p[3],
+                            url = p[4],
+                            type = type,
+                            isAdult = p[6] == "1",
+                            imageUrl = p[7],
+                            is4K = p[8] == "1",
+                            orderIndex = p[9].toIntOrNull() ?: result.size
+                        )
+                    )
+                }
+                line = reader.readLine()
+            }
+        }
+        result
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+fun demoCatalog(): List<MediaEntry> = listOf(
+    MediaEntry("1", "Obsidian Originals: Sintel 4K", "Internationellt", "4K • Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/Sintel.jpg", is4K = true, orderIndex = 0),
+    MediaEntry("2", "Big Buck Bunny", "Internationellt", "Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg", is4K = false, orderIndex = 1),
+    MediaEntry("3", "Tears of Steel 4K", "Internationellt", "Sci-Fi", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/TearsOfSteel.jpg", is4K = true, orderIndex = 2),
+    MediaEntry("4", "Elephants Dream", "Sverige", "Drama", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ElephantsDream.jpg", is4K = false, orderIndex = 3),
+    MediaEntry("5", "Nordic Chronicles", "Sverige", "Thriller", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerBlazes.jpg", is4K = true, orderIndex = 4),
+    MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
+    MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
+    MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
+)

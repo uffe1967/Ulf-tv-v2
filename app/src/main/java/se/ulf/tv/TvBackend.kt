@@ -55,13 +55,9 @@ object CoverImageCache {
     var epoch: Int = 1
     private val cache = LruCache<String, ImageBitmap>(36)
 
-    fun get(key: String): ImageBitmap? = synchronized(cache) {
-        cache.get("${epoch}_$key")
-    }
+    fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get("${epoch}_$key") }
 
-    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) {
-        cache.put("${epoch}_$key", bmp)
-    }
+    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) { cache.put("${epoch}_$key", bmp) }
 
     fun clearAndBump() = synchronized(cache) {
         epoch += 1
@@ -80,7 +76,7 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
             connectTimeout = 3500
             readTimeout = 4500
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.5")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.8")
         }
         val code = conn.responseCode
         if (code !in 200..299) {
@@ -337,21 +333,39 @@ fun is4KTitle(vararg texts: String): Boolean {
     return texts.any { raw -> tags.any { raw.lowercase().contains(it) } }
 }
 
+fun detectMediaType(group: String, title: String, url: String): MediaType {
+    val lg = group.lowercase()
+    val lt = title.lowercase()
+    val lu = url.lowercase().substringBefore("?")
+
+    val isSeries = lg.contains("serie") || lg.contains("series") || lg.contains("tv show") ||
+        (lt.contains("s0") && lt.contains("e0")) || lu.contains("/series/") || lu.contains("/tv/")
+    if (isSeries) return MediaType.SERIES
+
+    val isMovie = lg.contains("film") || lg.contains("movie") || lg.contains("movies") ||
+        lg.contains("vod") || lg.contains("cinema") || lg.contains("bio") ||
+        lu.contains("/movie/") || lu.contains("/movies/") || lu.contains("/vod/") ||
+        lu.endsWith(".mp4") || lu.endsWith(".mkv") || lu.endsWith(".avi") || lu.endsWith(".mov")
+    if (isMovie) return MediaType.MOVIE
+
+    return MediaType.LIVE
+}
+
 fun fetchText(urlString: String): String {
     val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 12000
-        readTimeout = 25000
+        connectTimeout = 15000
+        readTimeout = 45000
         instanceFollowRedirects = true
-        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.5")
+        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.8")
     }
     return try {
         val code = conn.responseCode
         if (code !in 200..299) return ""
         conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-            val sb = StringBuilder()
-            val buf = CharArray(8192)
+            val sb = StringBuilder(65536)
+            val buf = CharArray(32768)
             var total = 0
-            val maxChars = 6_000_000
+            val maxChars = 120_000_000
             while (true) {
                 val r = reader.read(buf)
                 if (r == -1) break
@@ -376,17 +390,18 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
     val cleanUser = user.trim()
     val cleanPass = pass.trim()
     val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
-    val result = mutableListOf<MediaEntry>()
-    val maxPerType = 150
+    val result = ArrayList<MediaEntry>(8192)
+    val maxTotal = 200_000
 
     fun parseJsonArraySafe(url: String, type: MediaType, idKey: String, extFallback: String): List<MediaEntry> {
-        val list = mutableListOf<MediaEntry>()
+        val list = ArrayList<MediaEntry>(2048)
         try {
             val raw = fetchText(url)
             val start = raw.indexOf('[')
             if (start == -1) return emptyList()
             val arr = JSONArray(raw.substring(start))
-            val count = min(arr.length(), maxPerType)
+            val remaining = (maxTotal - result.size).coerceAtLeast(0)
+            val count = min(arr.length(), remaining)
             for (i in 0 until count) {
                 val o = arr.optJSONObject(i) ?: continue
                 val id = o.optString(idKey).ifBlank { o.optString("stream_id") }
@@ -420,30 +435,9 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
         return list
     }
 
-    result.addAll(
-        parseJsonArraySafe(
-            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams",
-            MediaType.LIVE,
-            "stream_id",
-            "m3u8"
-        )
-    )
-    result.addAll(
-        parseJsonArraySafe(
-            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams",
-            MediaType.MOVIE,
-            "stream_id",
-            "mp4"
-        )
-    )
-    result.addAll(
-        parseJsonArraySafe(
-            "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series",
-            MediaType.SERIES,
-            "series_id",
-            "mp4"
-        )
-    )
+    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams", MediaType.LIVE, "stream_id", "m3u8"))
+    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams", MediaType.MOVIE, "stream_id", "mp4"))
+    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series", MediaType.SERIES, "series_id", "mp4"))
 
     if (result.isEmpty()) {
         val m3uUrl = "$base/get.php?username=$cleanUser&password=$cleanPass&type=m3u_plus&output=${if (format == "MPEG-TS") "ts" else "m3u8"}"
@@ -453,22 +447,38 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
     return result
 }
 
+private fun extractQuotedAttr(line: String, attrName: String): String {
+    val idx = line.indexOf(attrName, ignoreCase = true)
+    if (idx == -1) return ""
+    val eqIdx = line.indexOf('=', idx + attrName.length)
+    if (eqIdx == -1) return ""
+    var i = eqIdx + 1
+    while (i < line.length && line[i].isWhitespace()) i++
+    if (i >= line.length) return ""
+    val quote = line[i]
+    if (quote == '"' || quote == '\'') {
+        val endIdx = line.indexOf(quote, i + 1)
+        if (endIdx > i + 1) return line.substring(i + 1, endIdx).trim()
+    }
+    return ""
+}
+
 fun parseM3u(content: String, format: String): List<MediaEntry> {
     if (content.isBlank()) return emptyList()
-    val result = mutableListOf<MediaEntry>()
+    val result = ArrayList<MediaEntry>(8192)
     var name = "Okänd"
     var group = "Övrigt"
     var logo = ""
-    val gReg = Regex("""group-title=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-    val lReg = Regex("""tvg-logo=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+    val maxTotal = 200_000
 
     for (raw in content.lineSequence()) {
-        if (result.size >= 450) break
+        if (result.size >= maxTotal) break
         val line = raw.trim()
         if (line.isEmpty()) continue
         if (line.startsWith("#EXTINF", true)) {
-            group = gReg.find(line)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { "Övrigt" } ?: "Övrigt"
-            logo = lReg.find(line)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            val gVal = extractQuotedAttr(line, "group-title")
+            group = if (gVal.isNotBlank()) gVal else "Övrigt"
+            logo = extractQuotedAttr(line, "tvg-logo")
             val comma = line.lastIndexOf(',')
             name = if (comma != -1 && comma + 1 < line.length) {
                 line.substring(comma + 1).trim().ifBlank { "Okänd" }
@@ -477,15 +487,12 @@ fun parseM3u(content: String, format: String): List<MediaEntry> {
             }
         } else if (!line.startsWith("#")) {
             if (!line.startsWith("http://", true) && !line.startsWith("https://", true) && !line.startsWith("rtmp://", true)) {
+                name = "Okänd"
+                group = "Övrigt"
+                logo = ""
                 continue
             }
-            val lg = group.lowercase()
-            val lu = line.lowercase()
-            val type = when {
-                lg.contains("serie") || lu.contains("/series/") -> MediaType.SERIES
-                lg.contains("film") || lg.contains("movie") || lg.contains("vod") || lu.contains("/movie/") -> MediaType.MOVIE
-                else -> MediaType.LIVE
-            }
+            val type = detectMediaType(group, name, line)
             val (c, g) = extractCountryAndSubcategory(group, name)
             val idx = result.size
             result.add(
@@ -529,7 +536,7 @@ fun extractCountryAndSubcategory(rawGroup: String, itemTitle: String): Pair<Stri
         }
     }
 
-    val combined = "$cleaned $itemTitle".lowercase()
+    val combined = "$cleaned$itemTitle".lowercase()
     val sub = when {
         combined.contains("sport") || combined.contains("viaplay") || combined.contains("eurosport") || combined.contains("fotboll") || combined.contains("hockey") -> "Sport"
         combined.contains("news") || combined.contains("nyheter") || combined.contains("cnn") || combined.contains("bbc") || combined.contains("svt") -> "Nyheter"

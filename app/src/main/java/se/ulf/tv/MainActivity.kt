@@ -195,7 +195,7 @@ fun ObsidianApp() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("OBSIDIAN", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+               Text("OBSIDIAN V3", color = Color.Red, fontSize = 21.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
                 Surface(
                     color = Color(0xCC141720),
                     shape = RoundedCornerShape(50),

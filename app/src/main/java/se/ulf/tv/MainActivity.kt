@@ -423,7 +423,7 @@ fun LiveChannelRowItem(item: MediaEntry, onClick: () -> Unit) {
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(item.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${item.country} •${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Surface(color = if (item.is4K) Color(0xFFE50914) else Color(0xCCDC2626), shape = RoundedCornerShape(6.dp)) {
             Text(if (item.is4K) "4K LIVE" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
@@ -499,7 +499,7 @@ fun DropdownTriggerButton(label: String, expanded: Boolean, modifier: Modifier =
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 11.dp)
     ) {
-        Text("$label${if (expanded) "▲" else "▼"}", color = if (focused) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("$label  ${if (expanded) "▲" else "▼"}", color = if (focused) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -537,7 +537,7 @@ fun HeroShowcaseBanner(item: MediaEntry, onPlay: () -> Unit) {
                         Text("4K ULTRA HD", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
                     }
                 }
-                Text("${item.country}  •${item.genre}", color = Color(0xFFD1D5DB), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${item.country}  •  ${item.genre}", color = Color(0xFFD1D5DB), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(item.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Surface(color = Color.White, shape = RoundedCornerShape(8.dp)) {
@@ -622,7 +622,7 @@ fun PlexLiveCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Unit, on
             Text(if (item.is4K) "4K LIVE" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
         }
         Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("${item.country} •${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -733,4 +733,160 @@ fun SettingsView(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Snabbinmatning från dator eller mobil (samma Wi-Fi):", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("http
+                    Text("http://$localIp:8099/add", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            }
+            Text("IPTV-källa", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NavPill("M3U-länk", selectedMode == "M3U") { selectedMode = "M3U" }
+                NavPill("Xtream Codes", selectedMode == "XTREAM") { selectedMode = "XTREAM" }
+            }
+            if (selectedMode == "M3U") {
+                OutlinedTextField(value = m3u, onValueChange = { m3u = it }, label = { Text("M3U-spellista URL (http://...)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            } else {
+                OutlinedTextField(value = server, onValueChange = { server = it }, label = { Text("Server-URL (t.ex. http://server.com:8080)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(value = user, onValueChange = { user = it }, label = { Text("Användarnamn") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = pass, onValueChange = { pass = it }, label = { Text("Lösenord") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+                }
+            }
+            Text("Strömformat för Live TV", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NavPill("Auto (Smart växling)", selectedFormat == "AUTO") { selectedFormat = "AUTO" }
+                NavPill("Alltid HLS (.m3u8)", selectedFormat == "HLS") { selectedFormat = "HLS" }
+                NavPill("Alltid MPEG-TS (.ts)", selectedFormat == "MPEG-TS") { selectedFormat = "MPEG-TS" }
+            }
+            Surface(color = Color(0xFF161A26), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Föräldrakontroll (18+ / Vuxenkanaler)", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    if (isCurrentlyLocked) {
+                        Text("18+-innehåll är dolt och skyddat med PIN-kod.", color = Color(0xFF9CA3AF), fontSize = 13.sp)
+                        NavPill("Lås upp 18+ med PIN", true, onRequestUnlockAdult)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            NavPill("Av (Olåst)", !adultLock) { adultLock = false; pinWarning = null }
+                            NavPill("På (Kräv lösenord)", adultLock) { adultLock = true }
+                            if (initialAdultLock && initialAdultPin.isNotBlank() && adultUnlocked) NavPill("Lås 18+ nu", false, onLockAdultNow)
+                        }
+                        if (adultLock) {
+                            OutlinedTextField(value = adultPin, onValueChange = { adultPin = it; pinWarning = null }, label = { Text("Lösenord / PIN-kod för 18+") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                            if (pinWarning != null) Text(pinWarning!!, color = Color(0xFFFBBF24), fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    val saveLock = if (isCurrentlyLocked) initialAdultLock else adultLock
+                    val savePin = if (isCurrentlyLocked) initialAdultPin else adultPin.trim()
+                    if (saveLock && savePin.isEmpty()) pinWarning = "Ange en PIN-kod innan du sparar, eller välj Av."
+                    else onSave(selectedMode, selectedFormat, m3u.trim(), server.trim(), user.trim(), pass.trim(), saveLock, savePin)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                shape = RoundedCornerShape(50)
+            ) { Text("Spara & synka kanaler", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+@kotlin.OptIn(UnstableApi::class)
+@Composable
+fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var activeUrl by remember(item.url) { mutableStateOf(item.url) }
+    var preferSoftware by remember(item.url) { mutableStateOf(false) }
+    var triedFormatSwap by remember(item.url) { mutableStateOf(false) }
+    var autoDecoderFallback by remember(item.url) { mutableStateOf(false) }
+    var resumeMs by remember(item.url) { mutableStateOf(0L) }
+    var resolutionText by remember(item.url) { mutableStateOf("Laddar ström...") }
+    var audioTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
+    var subtitleTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
+    var selectedAudioIdx by remember(item.url) { mutableStateOf(0) }
+    var selectedSubIdx by remember(item.url) { mutableStateOf(-1) }
+    var currentTracksObj by remember(item.url) { mutableStateOf<Tracks?>(null) }
+
+    val exoPlayer = remember(activeUrl, preferSoftware) {
+        val selector = if (preferSoftware) {
+            MediaCodecSelector { mime, sec, tun ->
+                val all = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, sec, tun)
+                all.filter { !it.hardwareAccelerated } + all.filter { it.hardwareAccelerated }
+            }
+        } else MediaCodecSelector.DEFAULT
+        val rf = DefaultRenderersFactory(context).setEnableDecoderFallback(true).setMediaCodecSelector(selector)
+        ExoPlayer.Builder(context, rf).build().apply {
+            setMediaItem(MediaItem.fromUri(activeUrl))
+            if (resumeMs > 0L) seekTo(resumeMs)
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(s: VideoSize) {
+                if (s.width > 0 && s.height > 0) {
+                    val q = when { s.height >= 2160 -> "4K UHD"; s.height >= 1080 -> "Full HD"; s.height >= 720 -> "HD"; else -> "SD" }
+                    val tag = detectStreamTag(activeUrl)
+                    resolutionText = if (tag != null) "${s.width}×${s.height} ($q • $tag)" else "${s.width}×${s.height} ($q)"
+                }
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
+                    val swapped = swapStreamFormat(activeUrl); triedFormatSwap = true
+                    resolutionText = "Byter automatiskt till ${detectStreamTag(swapped) ?: "annat format"}..."
+                    activeUrl = swapped
+                } else if (!preferSoftware && !autoDecoderFallback) {
+                    autoDecoderFallback = true; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    resolutionText = "Byter till mjukvaruavkodare..."; preferSoftware = true
+                } else resolutionText = "Uppspelningsfel (${error.errorCodeName})"
+            }
+            override fun onTracksChanged(tracks: Tracks) {
+                currentTracksObj = tracks
+                val audios = mutableListOf<TrackOption>(); val subs = mutableListOf<TrackOption>()
+                tracks.groups.forEachIndexed { gIdx, g ->
+                    if (g.type == C.TRACK_TYPE_AUDIO) {
+                        for (i in 0 until g.length) { val f = g.getTrackFormat(i); audios.add(TrackOption((f.language ?: f.label ?: "Spår ${audios.size + 1}").uppercase(), gIdx, i)) }
+                    } else if (g.type == C.TRACK_TYPE_TEXT) {
+                        for (i in 0 until g.length) { val f = g.getTrackFormat(i); subs.add(TrackOption((f.language ?: f.label ?: "Text ${subs.size + 1}").uppercase(), gIdx, i)) }
+                    }
+                }
+                audioTracks = audios; subtitleTracks = subs
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener); exoPlayer.release() }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } }, update = { it.player = exoPlayer }, modifier = Modifier.fillMaxSize())
+        Row(modifier = Modifier.fillMaxWidth().align(Alignment.TopStart).background(Color(0xAA000000)).padding(horizontal = 24.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                NavPill("← Tillbaka", false, onBack)
+                Column {
+                    Text(item.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("$resolutionText • ${item.country} • ${item.genre}", color = Color(0xFF93C5FD), fontSize = 12.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val tag = detectStreamTag(activeUrl)
+                if (tag != null) NavPill("Format: $tag", false) { val sw = swapStreamFormat(activeUrl); resolutionText = "Växlar till ${detectStreamTag(sw) ?: ""}..."; activeUrl = sw }
+                NavPill(if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto", preferSoftware) { resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
+                NavPill("Ljud: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Standard"}", false) {
+                    val t = currentTracksObj ?: return@NavPill
+                    if (audioTracks.isEmpty()) return@NavPill
+                    val next = (selectedAudioIdx + 1) % audioTracks.size; selectedAudioIdx = next; val c = audioTracks[next]
+                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)).build()
+                }
+                val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
+                NavPill("Text: $subLabel", false) {
+                    val t = currentTracksObj ?: return@NavPill
+                    if (subtitleTracks.isEmpty()) return@NavPill
+                    val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1; selectedSubIdx = next
+                    val b = exoPlayer.trackSelectionParameters.buildUpon()
+                    if (next == -1) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) else { val c = subtitleTracks[next]; b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false); b.setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)) }
+                    exoPlayer.trackSelectionParameters = b.build()
+                }
+            }
+        }
+    }
+}

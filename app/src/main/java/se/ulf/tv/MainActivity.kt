@@ -719,58 +719,34 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
             }
             override fun onPlayerError(error: PlaybackException) {
                 if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
-                    val swapped = swapStreamFormat(activeUrl)
-                    triedFormatSwap = true
+                    val swapped = swapStreamFormat(activeUrl); triedFormatSwap = true
                     resolutionText = "Byter automatiskt till ${detectStreamTag(swapped) ?: "annat format"}..."
                     activeUrl = swapped
                 } else if (!preferSoftware && !autoDecoderFallback) {
-                    autoDecoderFallback = true
-                    resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    resolutionText = "Byter till mjukvaruavkodare..."
-                    preferSoftware = true
-                } else {
-                    resolutionText = "Uppspelningsfel (${error.errorCodeName})"
-                }
+                    autoDecoderFallback = true; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    resolutionText = "Byter till mjukvaruavkodare..."; preferSoftware = true
+                } else resolutionText = "Uppspelningsfel (${error.errorCodeName})"
             }
             override fun onTracksChanged(tracks: Tracks) {
                 currentTracksObj = tracks
-                val audios = mutableListOf<TrackOption>()
-                val subs = mutableListOf<TrackOption>()
+                val audios = mutableListOf<TrackOption>(); val subs = mutableListOf<TrackOption>()
                 tracks.groups.forEachIndexed { gIdx, g ->
                     if (g.type == C.TRACK_TYPE_AUDIO) {
-                        for (i in 0 until g.length) {
-                            val f = g.getTrackFormat(i)
-                            audios.add(TrackOption((f.language ?: f.label ?: "Spår ${audios.size + 1}").uppercase(), gIdx, i))
-                        }
+                        for (i in 0 until g.length) { val f = g.getTrackFormat(i); audios.add(TrackOption((f.language ?: f.label ?: "Spår ${audios.size + 1}").uppercase(), gIdx, i)) }
                     } else if (g.type == C.TRACK_TYPE_TEXT) {
-                        for (i in 0 until g.length) {
-                            val f = g.getTrackFormat(i)
-                            subs.add(TrackOption((f.language ?: f.label ?: "Text ${subs.size + 1}").uppercase(), gIdx, i))
-                        }
+                        for (i in 0 until g.length) { val f = g.getTrackFormat(i); subs.add(TrackOption((f.language ?: f.label ?: "Text ${subs.size + 1}").uppercase(), gIdx, i)) }
                     }
                 }
-                audioTracks = audios
-                subtitleTracks = subs
+                audioTracks = audios; subtitleTracks = subs
             }
         }
         exoPlayer.addListener(listener)
-        onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
-        }
+        onDispose { exoPlayer.removeListener(listener); exoPlayer.release() }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } },
-            update = { it.player = exoPlayer },
-            modifier = Modifier.fillMaxSize()
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth().align(Alignment.TopStart).background(Color(0xAA000000)).padding(horizontal = 24.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } }, update = { it.player = exoPlayer }, modifier = Modifier.fillMaxSize())
+        Row(modifier = Modifier.fillMaxWidth().align(Alignment.TopStart).background(Color(0xAA000000)).padding(horizontal = 24.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 NavPill("← Tillbaka", false, onBack)
                 Column {
@@ -780,38 +756,21 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val tag = detectStreamTag(activeUrl)
-                if (tag != null) {
-                    NavPill("Format: $tag", false) {
-                        val sw = swapStreamFormat(activeUrl)
-                        resolutionText = "Växlar till ${detectStreamTag(sw) ?: ""}..."
-                        activeUrl = sw
-                    }
-                }
-                NavPill(if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto", preferSoftware) {
-                    resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    preferSoftware = !preferSoftware
-                }
+                if (tag != null) NavPill("Format: $tag", false) { val sw = swapStreamFormat(activeUrl); resolutionText = "Växlar till ${detectStreamTag(sw) ?: ""}..."; activeUrl = sw }
+                NavPill(if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto", preferSoftware) { resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
                 NavPill("Ljud: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Standard"}", false) {
                     val t = currentTracksObj ?: return@NavPill
                     if (audioTracks.isEmpty()) return@NavPill
-                    val next = (selectedAudioIdx + 1) % audioTracks.size
-                    selectedAudioIdx = next
-                    val c = audioTracks[next]
-                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                        .setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)).build()
+                    val next = (selectedAudioIdx + 1) % audioTracks.size; selectedAudioIdx = next; val c = audioTracks[next]
+                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)).build()
                 }
                 val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
                 NavPill("Text: $subLabel", false) {
                     val t = currentTracksObj ?: return@NavPill
                     if (subtitleTracks.isEmpty()) return@NavPill
-                    val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1
-                    selectedSubIdx = next
+                    val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1; selectedSubIdx = next
                     val b = exoPlayer.trackSelectionParameters.buildUpon()
-                    if (next == -1) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) else {
-                        val c = subtitleTracks[next]
-                        b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                        b.setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex))
-                    }
+                    if (next == -1) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) else { val c = subtitleTracks[next]; b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false); b.setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)) }
                     exoPlayer.trackSelectionParameters = b.build()
                 }
             }

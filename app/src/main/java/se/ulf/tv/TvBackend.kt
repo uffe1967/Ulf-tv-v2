@@ -1,5 +1,6 @@
 package se.ulf.tv
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
@@ -7,11 +8,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.Inet4Address
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import java.net.URLDecoder
@@ -65,24 +65,44 @@ object CoverImageCache {
     }
 }
 
+fun openConnectionFollowingRedirects(urlString: String): HttpURLConnection {
+    var currentUrl = urlString.trim()
+    var redirects = 0
+    while (redirects < 6) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 45000
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "VLC/3.0.18 LibVLC/3.0.18")
+            setRequestProperty("Accept", "*/*")
+        }
+        val code = conn.responseCode
+        if (code in listOf(301, 302, 303, 307, 308)) {
+            val location = conn.getHeaderField("Location")
+            conn.disconnect()
+            if (location.isNullOrBlank()) throw IllegalStateException("Tom omdirigering ($code)")
+            currentUrl = URL(URL(currentUrl), location).toString()
+            redirects++
+            continue
+        }
+        if (code !in 200..299) {
+            conn.disconnect()
+            throw IllegalStateException("HTTP $code")
+        }
+        return conn
+    }
+    throw IllegalStateException("För många omdirigeringar")
+}
+
 fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
     if (urlString.isBlank()) return null
     val cleanUrl = urlString.trim()
     if (!cleanUrl.startsWith("http://", true) && !cleanUrl.startsWith("https://", true)) {
         return null
     }
+    var conn: HttpURLConnection? = null
     return try {
-        val conn = (URL(cleanUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 3500
-            readTimeout = 4500
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.8")
-        }
-        val code = conn.responseCode
-        if (code !in 200..299) {
-            conn.disconnect()
-            return null
-        }
+        conn = openConnectionFollowingRedirects(cleanUrl)
         val bytes = conn.inputStream.use { input ->
             val out = ByteArrayOutputStream()
             val buf = ByteArray(4096)
@@ -91,12 +111,11 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
                 val read = input.read(buf)
                 if (read == -1) break
                 total += read
-                if (total > 1_500_000) return null
+                if (total > 2_000_000) return null
                 out.write(buf, 0, read)
             }
             out.toByteArray()
         }
-        conn.disconnect()
         if (bytes.isEmpty()) return null
 
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -119,6 +138,8 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
         )?.asImageBitmap()
     } catch (_: Exception) {
         null
+    } finally {
+        try { conn?.disconnect() } catch (_: Exception) { }
     }
 }
 
@@ -321,9 +342,9 @@ fun detectAdultContent(vararg texts: String): Boolean {
         "hustler", "brazzers", "dorcel", "redlight", "penthouse", "vivid"
     )
     for (raw in texts) {
+        if (raw.isEmpty()) continue
         val low = raw.lowercase()
         if (keys.any { low.contains(it) }) return true
-        if (low.split(" ", "|", "-", ":", "/", "(", ")", "[", "]").any { it == "sex" }) return true
     }
     return false
 }
@@ -352,20 +373,13 @@ fun detectMediaType(group: String, title: String, url: String): MediaType {
 }
 
 fun fetchText(urlString: String): String {
-    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15000
-        readTimeout = 45000
-        instanceFollowRedirects = true
-        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.8")
-    }
+    val conn = openConnectionFollowingRedirects(urlString)
     return try {
-        val code = conn.responseCode
-        if (code !in 200..299) return ""
         conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
             val sb = StringBuilder(65536)
-            val buf = CharArray(32768)
+            val buf = CharArray(16384)
             var total = 0
-            val maxChars = 120_000_000
+            val maxChars = 40_000_000
             while (true) {
                 val r = reader.read(buf)
                 if (r == -1) break
@@ -375,76 +389,9 @@ fun fetchText(urlString: String): String {
             }
             sb.toString().removePrefix("\uFEFF").trimStart()
         }
-    } catch (_: Exception) {
-        ""
     } finally {
-        try {
-            conn.disconnect()
-        } catch (_: Exception) {
-        }
+        try { conn.disconnect() } catch (_: Exception) { }
     }
-}
-
-fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
-    val base = server.trim().trimEnd('/')
-    val cleanUser = user.trim()
-    val cleanPass = pass.trim()
-    val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
-    val result = ArrayList<MediaEntry>(8192)
-    val maxTotal = 200_000
-
-    fun parseJsonArraySafe(url: String, type: MediaType, idKey: String, extFallback: String): List<MediaEntry> {
-        val list = ArrayList<MediaEntry>(2048)
-        try {
-            val raw = fetchText(url)
-            val start = raw.indexOf('[')
-            if (start == -1) return emptyList()
-            val arr = JSONArray(raw.substring(start))
-            val remaining = (maxTotal - result.size).coerceAtLeast(0)
-            val count = min(arr.length(), remaining)
-            for (i in 0 until count) {
-                val o = arr.optJSONObject(i) ?: continue
-                val id = o.optString(idKey).ifBlank { o.optString("stream_id") }
-                if (id.isBlank()) continue
-                val name = o.optString("name", o.optString("title", "Kanal")).trim().ifBlank { "Kanal" }
-                val rawCat = o.optString("category_name", o.optString("genre", name))
-                val (c, g) = extractCountryAndSubcategory(rawCat, name)
-                val icon = o.optString("stream_icon", "").ifBlank { o.optString("cover", "") }.trim()
-                val streamUrl = when (type) {
-                    MediaType.LIVE -> "$base/live/$cleanUser/$cleanPass/$id.$extLive"
-                    MediaType.MOVIE -> "$base/movie/$cleanUser/$cleanPass/$id.${o.optString("container_extension", extFallback).ifBlank { extFallback }}"
-                    MediaType.SERIES -> "$base/series/$cleanUser/$cleanPass/$id.$extFallback"
-                }
-                list.add(
-                    MediaEntry(
-                        id = "${type.name}_${i}_$id",
-                        title = name,
-                        country = c,
-                        genre = g,
-                        url = streamUrl,
-                        type = type,
-                        isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name, rawCat),
-                        imageUrl = icon,
-                        is4K = is4KTitle(name, rawCat, g),
-                        orderIndex = i
-                    )
-                )
-            }
-        } catch (_: Exception) {
-        }
-        return list
-    }
-
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams", MediaType.LIVE, "stream_id", "m3u8"))
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams", MediaType.MOVIE, "stream_id", "mp4"))
-    result.addAll(parseJsonArraySafe("$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series", MediaType.SERIES, "series_id", "mp4"))
-
-    if (result.isEmpty()) {
-        val m3uUrl = "$base/get.php?username=$cleanUser&password=$cleanPass&type=m3u_plus&output=${if (format == "MPEG-TS") "ts" else "m3u8"}"
-        return parseM3u(fetchText(m3uUrl), format)
-    }
-
-    return result
 }
 
 private fun extractQuotedAttr(line: String, attrName: String): String {
@@ -463,145 +410,21 @@ private fun extractQuotedAttr(line: String, attrName: String): String {
     return ""
 }
 
-fun parseM3u(content: String, format: String): List<MediaEntry> {
-    if (content.isBlank()) return emptyList()
-    val result = ArrayList<MediaEntry>(8192)
-    var name = "Okänd"
-    var group = "Övrigt"
-    var logo = ""
-    val maxTotal = 200_000
-
-    for (raw in content.lineSequence()) {
-        if (result.size >= maxTotal) break
-        val line = raw.trim()
-        if (line.isEmpty()) continue
-        if (line.startsWith("#EXTINF", true)) {
-            val gVal = extractQuotedAttr(line, "group-title")
-            group = if (gVal.isNotBlank()) gVal else "Övrigt"
-            logo = extractQuotedAttr(line, "tvg-logo")
-            val comma = line.lastIndexOf(',')
-            name = if (comma != -1 && comma + 1 < line.length) {
-                line.substring(comma + 1).trim().ifBlank { "Okänd" }
-            } else {
-                "Okänd"
-            }
-        } else if (!line.startsWith("#")) {
-            if (!line.startsWith("http://", true) && !line.startsWith("https://", true) && !line.startsWith("rtmp://", true)) {
-                name = "Okänd"
-                group = "Övrigt"
-                logo = ""
-                continue
-            }
-            val type = detectMediaType(group, name, line)
-            val (c, g) = extractCountryAndSubcategory(group, name)
-            val idx = result.size
-            result.add(
-                MediaEntry(
-                    id = "${idx}_${name.hashCode()}",
-                    title = name,
-                    country = c,
-                    genre = g,
-                    url = if (type == MediaType.LIVE) applyStreamFormat(line, format) else line,
-                    type = type,
-                    isAdult = detectAdultContent(name, group),
-                    imageUrl = logo,
-                    is4K = is4KTitle(name, group, g),
-                    orderIndex = idx
-                )
-            )
-            name = "Okänd"
-            group = "Övrigt"
-            logo = ""
-        }
-    }
-    return result
-}
-
-fun extractCountryAndSubcategory(rawGroup: String, itemTitle: String): Pair<String, String> {
-    val cleaned = rawGroup.trim()
-    val u = cleaned.uppercase()
-    val titleUpper = itemTitle.uppercase()
-
-    val country = when {
-        u.startsWith("SE") || u.contains("SWED") || u.contains("SVERIGE") || titleUpper.startsWith("SE ") -> "Sverige"
-        u.startsWith("NO") || u.contains("NORW") || u.contains("NORGE") || titleUpper.startsWith("NO ") -> "Norge"
-        u.startsWith("DK") || u.contains("DENM") || u.contains("DANMARK") || titleUpper.startsWith("DK ") -> "Danmark"
-        u.startsWith("FI") || u.contains("FINL") || titleUpper.startsWith("FI ") -> "Finland"
-        u.startsWith("UK") || u.startsWith("GB") || titleUpper.startsWith("UK ") -> "UK"
-        u.startsWith("US") || u.contains("USA") || titleUpper.startsWith("US ") -> "USA"
-        u.startsWith("DE") || u.contains("GERM") || u.contains("TYSK") || titleUpper.startsWith("DE ") -> "Tyskland"
-        else -> {
-            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
-            if (parts.size == 2 && parts[0].length in 2..12) parts[0] else "Internationellt"
-        }
-    }
-
-    val combined = "$cleaned$itemTitle".lowercase()
-    val sub = when {
-        combined.contains("sport") || combined.contains("viaplay") || combined.contains("eurosport") || combined.contains("fotboll") || combined.contains("hockey") -> "Sport"
-        combined.contains("news") || combined.contains("nyheter") || combined.contains("cnn") || combined.contains("bbc") || combined.contains("svt") -> "Nyheter"
-        combined.contains("music") || combined.contains("musik") || combined.contains("mtv") || combined.contains("radio") -> "Musik"
-        combined.contains("film") || combined.contains("movie") || combined.contains("cinema") || combined.contains("hbo") -> "Film"
-        combined.contains("kids") || combined.contains("barn") || combined.contains("disney") || combined.contains("cartoon") -> "Barn"
-        combined.contains("doc") || combined.contains("dokumentär") || combined.contains("natgeo") || combined.contains("discovery") -> "Dokumentär"
-        combined.contains("serie") || combined.contains("drama") -> "Serier"
-        else -> {
-            val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
-            if (parts.size == 2 && parts[0].length in 2..12) parts[1] else cleaned.ifBlank { "Allmänt" }
-        }
-    }
-
-    return country to sub
-}
-
-fun demoCatalog(): List<MediaEntry> = listOf(
-    MediaEntry("1", "Obsidian Originals: Sintel 4K", "Internationellt", "4K • Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/Sintel.jpg", is4K = true, orderIndex = 0),
-    MediaEntry("2", "Big Buck Bunny", "Internationellt", "Äventyr", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg", is4K = false, orderIndex = 1),
-    MediaEntry("3", "Tears of Steel 4K", "Internationellt", "Sci-Fi", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", MediaType.MOVIE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/TearsOfSteel.jpg", is4K = true, orderIndex = 2),
-    MediaEntry("4", "Elephants Dream", "Sverige", "Drama", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ElephantsDream.jpg", is4K = false, orderIndex = 3),
-    MediaEntry("5", "Nordic Chronicles", "Sverige", "Thriller", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.SERIES, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerBlazes.jpg", is4K = true, orderIndex = 4),
-    MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
-    MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
-    MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
-)fun openConnectionFollowingRedirects(urlString: String): HttpURLConnection {
-    var currentUrl = urlString.trim()
-    var redirects = 0
-    while (redirects < 6) {
-        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 45000
-            instanceFollowRedirects = false
-            setRequestProperty("User-Agent", "VLC/3.0.18 LibVLC/3.0.18")
-            setRequestProperty("Accept", "*/*")
-        }
-        val code = conn.responseCode
-        if (code in listOf(301, 302, 303, 307, 308)) {
-            val location = conn.getHeaderField("Location")
-            conn.disconnect()
-            if (location.isNullOrBlank()) throw IllegalStateException("Tom omdirigering ($code)")
-            currentUrl = URL(URL(currentUrl), location).toString()
-            redirects++
-            continue
-        }
-        if (code !in 200..299) {
-            conn.disconnect()
-            throw IllegalStateException("HTTP $code")
-        }
-        return conn
-    }
-    throw IllegalStateException("För många omdirigeringar")
-}
-
-fun parseM3uFromUrl(urlString: String, format: String): List<MediaEntry> {
+fun parseM3uFromUrl(
+    urlString: String,
+    format: String,
+    onProgress: (Int) -> Unit = {}
+): List<MediaEntry> {
     val conn = openConnectionFollowingRedirects(urlString)
     return try {
-        val result = ArrayList<MediaEntry>(8192)
+        val result = ArrayList<MediaEntry>(16384)
+        val groupCache = HashMap<String, Pair<String, String>>(512)
         var name = "Okänd"
         var group = "Övrigt"
         var logo = ""
         val maxTotal = 150_000
 
-        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+        conn.inputStream.bufferedReader(Charsets.UTF_8, 65536).use { reader ->
             var rawLine = reader.readLine()
             while (rawLine != null && result.size < maxTotal) {
                 val line = rawLine.removePrefix("\uFEFF").trim()
@@ -619,7 +442,9 @@ fun parseM3uFromUrl(urlString: String, format: String): List<MediaEntry> {
                     } else if (!line.startsWith("#")) {
                         if (line.startsWith("http://", true) || line.startsWith("https://", true) || line.startsWith("rtmp://", true)) {
                             val type = detectMediaType(group, name, line)
-                            val (c, g) = extractCountryAndSubcategory(group, name)
+                            val (c, g) = groupCache.getOrPut(group) {
+                                extractCountryAndSubcategory(group, "")
+                            }
                             val idx = result.size
                             result.add(
                                 MediaEntry(
@@ -635,6 +460,9 @@ fun parseM3uFromUrl(urlString: String, format: String): List<MediaEntry> {
                                     orderIndex = idx
                                 )
                             )
+                            if (result.size % 2500 == 0) {
+                                onProgress(result.size)
+                            }
                         }
                         name = "Okänd"
                         group = "Övrigt"
@@ -649,3 +477,6 @@ fun parseM3uFromUrl(urlString: String, format: String): List<MediaEntry> {
         try { conn.disconnect() } catch (_: Exception) { }
     }
 }
+
+fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
+    val

@@ -7,6 +7,7 @@ import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -637,4 +638,87 @@ fun demoCatalog(): List<MediaEntry> = listOf(
     MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
     MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
     MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
+) data class SeriesEpisode(
+    val id: String,
+    val season: Int,
+    val episodeNum: Int,
+    val title: String,
+    val url: String
 )
+
+fun fetchXtreamSeriesEpisodes(
+    server: String,
+    user: String,
+    pass: String,
+    seriesId: String
+): Map<Int, List<SeriesEpisode>> {
+    val base = server.trim().trimEnd('/')
+    val cleanUser = user.trim()
+    val cleanPass = pass.trim()
+    val url = "$base/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series_info&series_id=$seriesId"
+    val raw = fetchText(url)
+    val start = raw.indexOf('{')
+    if (start == -1) return emptyMap()
+    val root = JSONObject(raw.substring(start))
+    val episodesObj = root.optJSONObject("episodes") ?: return emptyMap()
+    val result = sortedMapOf<Int, MutableList<SeriesEpisode>>()
+
+    val keys = episodesObj.keys()
+    while (keys.hasNext()) {
+        val seasonKey = keys.next()
+        val seasonNum = seasonKey.toIntOrNull() ?: 1
+        val arr = episodesObj.optJSONArray(seasonKey) ?: continue
+        val list = result.getOrPut(seasonNum) { mutableListOf() }
+        for (i in 0 until arr.length()) {
+            val ep = arr.optJSONObject(i) ?: continue
+            val epId = ep.optString("id").ifBlank { continue }
+            val ext = ep.optString("container_extension", "mp4").ifBlank { "mp4" }
+            val epNum = ep.optString("episode_num").toIntOrNull() ?: (i + 1)
+            val epTitle = ep.optString("title", "Avsnitt $epNum").trim().ifBlank { "Avsnitt $epNum" }
+            list.add(
+                SeriesEpisode(
+                    id = epId,
+                    season = seasonNum,
+                    episodeNum = epNum,
+                    title = epTitle,
+                    url = "$base/series/$cleanUser/$cleanPass/$epId.$ext"
+                )
+            )
+        }
+        list.sortBy { it.episodeNum }
+    }
+    return result
+}
+
+private val m3uSeasonEpisodeRegex = Regex("""(?i)\bS(\d{1,2})\s*E(\d{1,3})\b""")
+
+fun extractSeriesBaseTitle(title: String): String {
+    val match = m3uSeasonEpisodeRegex.find(title)
+    return if (match != null) {
+        title.substring(0, match.range.first).trim(' ', '-', '|', ':').ifBlank { title }
+    } else {
+        title.trim()
+    }
+}
+
+fun buildM3uSeriesEpisodes(seriesTitle: String, allSeriesItems: List<MediaEntry>): Map<Int, List<SeriesEpisode>> {
+    val target = extractSeriesBaseTitle(seriesTitle).lowercase()
+    val result = sortedMapOf<Int, MutableList<SeriesEpisode>>()
+    for (item in allSeriesItems) {
+        if (extractSeriesBaseTitle(item.title).lowercase() != target) continue
+        val match = m3uSeasonEpisodeRegex.find(item.title)
+        val season = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val epNum = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: (result[season]?.size?.plus(1) ?: 1)
+        result.getOrPut(season) { mutableListOf() }.add(
+            SeriesEpisode(
+                id = item.id,
+                season = season,
+                episodeNum = epNum,
+                title = item.title,
+                url = item.url
+            )
+        )
+    }
+    result.values.forEach { list -> list.sortBy { it.episodeNum } }
+    return result
+}

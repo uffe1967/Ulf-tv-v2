@@ -26,7 +26,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -50,17 +52,22 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -89,7 +96,8 @@ data class MediaEntry(
     val country: String,
     val genre: String,
     val url: String,
-    val type: MediaType
+    val type: MediaType,
+    val isAdult: Boolean = false
 )
 
 data class TrackOption(
@@ -116,31 +124,52 @@ fun UlfTvApp() {
     val scope = rememberCoroutineScope()
 
     var mode by remember { mutableStateOf(prefs.getString("mode", "M3U") ?: "M3U") }
+    var streamFormat by remember { mutableStateOf(prefs.getString("stream_format", "AUTO") ?: "AUTO") }
     var m3uUrl by remember { mutableStateOf(prefs.getString("m3u_url", "") ?: "") }
     var xtServer by remember { mutableStateOf(prefs.getString("xt_server", "") ?: "") }
     var xtUser by remember { mutableStateOf(prefs.getString("xt_user", "") ?: "") }
     var xtPass by remember { mutableStateOf(prefs.getString("xt_pass", "") ?: "") }
+
+    var adultLockEnabled by remember { mutableStateOf(prefs.getBoolean("adult_lock_enabled", false)) }
+    var adultPin by remember { mutableStateOf(prefs.getString("adult_pin", "") ?: "") }
+    var adultUnlocked by remember { mutableStateOf(false) }
+    var showUnlockDialog by remember { mutableStateOf(false) }
+    var pendingAdultItem by remember { mutableStateOf<MediaEntry?>(null) }
 
     var catalog by remember { mutableStateOf(demoCatalog()) }
     var currentSection by remember { mutableStateOf(NavSection.HOME) }
     var playingItem by remember { mutableStateOf<MediaEntry?>(null) }
     var statusText by remember { mutableStateOf("Demoläge • Lägg till M3U eller Xtream under Inställningar") }
 
+    val isAdultRestricted = adultLockEnabled && adultPin.isNotBlank() && !adultUnlocked
+    val hasAdultItems = remember(catalog) { catalog.any { it.isAdult } }
+
+    fun handleSelectMedia(entry: MediaEntry) {
+        if (entry.isAdult && isAdultRestricted) {
+            pendingAdultItem = entry
+            showUnlockDialog = true
+        } else {
+            playingItem = entry
+        }
+    }
+
     fun syncCatalog(
         useMode: String,
+        useFormat: String,
         url: String,
         server: String,
         user: String,
         pass: String
     ) {
         scope.launch {
-            statusText = "Synkar kanaler, filmer och serier..."
+            statusText = "Synkar kanaler, filmer och serier ($useFormat)..."
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     if (useMode == "XTREAM" && server.isNotBlank() && user.isNotBlank()) {
-                        fetchXtreamCatalog(server, user, pass)
+                        fetchXtreamCatalog(server, user, pass, useFormat)
                     } else if (url.isNotBlank()) {
-                        parseM3u(fetchText(url.trim()))
+                        val adjustedPlaylistUrl = applyPlaylistFormat(url.trim(), useFormat)
+                        parseM3u(fetchText(adjustedPlaylistUrl), useFormat)
                     } else {
                         demoCatalog()
                     }
@@ -150,7 +179,7 @@ fun UlfTvApp() {
                     val liveCount = loaded.count { it.type == MediaType.LIVE }
                     val movieCount = loaded.count { it.type == MediaType.MOVIE }
                     val seriesCount = loaded.count { it.type == MediaType.SERIES }
-                    statusText = "$liveCount Live • $movieCount Filmer • $seriesCount Serier"
+                    statusText = "$liveCount Live • $movieCount Filmer • $seriesCount Serier ($useFormat)"
                 } else {
                     catalog = demoCatalog()
                     statusText = "Inga strömmar hittades – visar demokatalog"
@@ -163,7 +192,7 @@ fun UlfTvApp() {
 
     LaunchedEffect(Unit) {
         if ((mode == "M3U" && m3uUrl.isNotBlank()) || (mode == "XTREAM" && xtServer.isNotBlank())) {
-            syncCatalog(mode, m3uUrl, xtServer, xtUser, xtPass)
+            syncCatalog(mode, streamFormat, m3uUrl, xtServer, xtUser, xtPass)
         }
     }
 
@@ -171,6 +200,7 @@ fun UlfTvApp() {
         BackHandler { playingItem = null }
         PlayerScreen(
             item = playingItem!!,
+            streamFormatMode = streamFormat,
             onBack = { playingItem = null }
         )
         return
@@ -190,7 +220,6 @@ fun UlfTvApp() {
                 .fillMaxSize()
                 .padding(horizontal = 36.dp, vertical = 22.dp)
         ) {
-            // Apple TV-inspirerad toppmeny
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -207,7 +236,7 @@ fun UlfTvApp() {
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 1.5.sp
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     NavSection.entries.forEach { section ->
                         NavPill(
                             label = section.label,
@@ -216,60 +245,212 @@ fun UlfTvApp() {
                         )
                     }
                 }
-                Text(
-                    text = statusText,
-                    color = Color(0xFF9CA3AF),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (adultLockEnabled && adultPin.isNotBlank() && hasAdultItems) {
+                        NavPill(
+                            label = if (adultUnlocked) "🔓 Lås 18+" else "🔒 Lås upp 18+",
+                            selected = adultUnlocked,
+                            onClick = {
+                                if (adultUnlocked) {
+                                    adultUnlocked = false
+                                } else {
+                                    pendingAdultItem = null
+                                    showUnlockDialog = true
+                                }
+                            }
+                        )
+                    }
+                    Text(
+                        text = statusText,
+                        color = Color(0xFF9CA3AF),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(22.dp))
 
             when (currentSection) {
                 NavSection.HOME -> HomeView(
-                    catalog = catalog,
-                    onPlay = { playingItem = it }
+                    catalog = if (isAdultRestricted) catalog.filterNot { it.isAdult } else catalog,
+                    hideAdult = isAdultRestricted,
+                    onPlay = ::handleSelectMedia
                 )
                 NavSection.LIVE -> CatalogView(
                     items = catalog.filter { it.type == MediaType.LIVE },
+                    hideAdult = isAdultRestricted,
                     emptyLabel = "Inga Live TV-kanaler hittades.",
-                    onPlay = { playingItem = it }
+                    onPlay = ::handleSelectMedia
                 )
                 NavSection.MOVIES -> CatalogView(
                     items = catalog.filter { it.type == MediaType.MOVIE },
+                    hideAdult = isAdultRestricted,
                     emptyLabel = "Inga filmer hittades i spellistan.",
-                    onPlay = { playingItem = it }
+                    onPlay = ::handleSelectMedia
                 )
                 NavSection.SERIES -> CatalogView(
                     items = catalog.filter { it.type == MediaType.SERIES },
+                    hideAdult = isAdultRestricted,
                     emptyLabel = "Inga serier hittades i spellistan.",
-                    onPlay = { playingItem = it }
+                    onPlay = ::handleSelectMedia
                 )
                 NavSection.SETTINGS -> SettingsView(
                     initialMode = mode,
+                    initialFormat = streamFormat,
                     initialM3u = m3uUrl,
                     initialServer = xtServer,
                     initialUser = xtUser,
                     initialPass = xtPass,
-                    onSave = { newMode, newM3u, newServer, newUser, newPass ->
+                    initialAdultLock = adultLockEnabled,
+                    initialAdultPin = adultPin,
+                    onSave = { newMode, newFormat, newM3u, newServer, newUser, newPass, newAdultLock, newAdultPin ->
                         mode = newMode
+                        streamFormat = newFormat
                         m3uUrl = newM3u
                         xtServer = newServer
                         xtUser = newUser
                         xtPass = newPass
+                        adultLockEnabled = newAdultLock
+                        adultPin = newAdultPin
+                        if (newAdultLock) {
+                            adultUnlocked = false
+                        }
                         prefs.edit()
                             .putString("mode", newMode)
+                            .putString("stream_format", newFormat)
                             .putString("m3u_url", newM3u)
                             .putString("xt_server", newServer)
                             .putString("xt_user", newUser)
                             .putString("xt_pass", newPass)
+                            .putBoolean("adult_lock_enabled", newAdultLock)
+                            .putString("adult_pin", newAdultPin)
                             .apply()
                         currentSection = NavSection.HOME
-                        syncCatalog(newMode, newM3u, newServer, newUser, newPass)
+                        syncCatalog(newMode, newFormat, newM3u, newServer, newUser, newPass)
                     }
                 )
+            }
+        }
+
+        if (showUnlockDialog) {
+            BackHandler {
+                showUnlockDialog = false
+                pendingAdultItem = null
+            }
+            PinUnlockOverlay(
+                expectedPin = adultPin,
+                onUnlocked = {
+                    adultUnlocked = true
+                    showUnlockDialog = false
+                    val toPlay = pendingAdultItem
+                    pendingAdultItem = null
+                    if (toPlay != null) {
+                        playingItem = toPlay
+                    }
+                },
+                onDismiss = {
+                    showUnlockDialog = false
+                    pendingAdultItem = null
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun PinUnlockOverlay(
+    expectedPin: String,
+    onUnlocked: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var enteredPin by remember { mutableStateOf("") }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = Color(0xFF161D2B),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.5.dp, Color(0x44FFFFFF)),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "🔒 18+ / Vuxenkanaler låsta",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Ange ditt lösenord för att låsa upp 18+-innehåll.",
+                    color = Color(0xFF9CA3AF),
+                    fontSize = 14.sp
+                )
+                OutlinedTextField(
+                    value = enteredPin,
+                    onValueChange = {
+                        enteredPin = it
+                        errorMsg = null
+                    },
+                    label = { Text("Lösenord / PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (errorMsg != null) {
+                    Text(
+                        text = errorMsg!!,
+                        color = Color(0xFFF87171),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = {
+                            if (enteredPin == expectedPin) {
+                                onUnlocked()
+                            } else {
+                                errorMsg = "Fel lösenord, försök igen."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Lås upp", fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF263042),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Avbryt")
+                    }
+                }
             }
         }
     }
@@ -315,6 +496,7 @@ fun NavPill(
 @Composable
 fun HomeView(
     catalog: List<MediaEntry>,
+    hideAdult: Boolean,
     onPlay: (MediaEntry) -> Unit
 ) {
     val featured = catalog.firstOrNull()
@@ -322,7 +504,12 @@ fun HomeView(
     val movies = remember(catalog) { catalog.filter { it.type == MediaType.MOVIE }.take(20) }
     val series = remember(catalog) { catalog.filter { it.type == MediaType.SERIES }.take(20) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
         if (featured != null) {
             Surface(
                 color = Color(0xFF161D2B),
@@ -369,14 +556,15 @@ fun HomeView(
         }
 
         if (live.isNotEmpty()) {
-            MediaRow(title = "Live TV", items = live, onPlay = onPlay)
+            MediaRow(title = "Live TV", items = live, hideAdult = hideAdult, onPlay = onPlay)
         }
         if (movies.isNotEmpty()) {
-            MediaRow(title = "Filmer", items = movies, onPlay = onPlay)
+            MediaRow(title = "Filmer", items = movies, hideAdult = hideAdult, onPlay = onPlay)
         }
         if (series.isNotEmpty()) {
-            MediaRow(title = "Serier", items = series, onPlay = onPlay)
+            MediaRow(title = "Serier", items = series, hideAdult = hideAdult, onPlay = onPlay)
         }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -384,6 +572,7 @@ fun HomeView(
 fun MediaRow(
     title: String,
     items: List<MediaEntry>,
+    hideAdult: Boolean,
     onPlay: (MediaEntry) -> Unit
 ) {
     Column {
@@ -398,6 +587,7 @@ fun MediaRow(
             items(items) { item ->
                 MediaCard(
                     item = item,
+                    locked = item.isAdult && hideAdult,
                     modifier = Modifier.width(230.dp),
                     onClick = { onPlay(item) }
                 )
@@ -409,6 +599,7 @@ fun MediaRow(
 @Composable
 fun CatalogView(
     items: List<MediaEntry>,
+    hideAdult: Boolean,
     emptyLabel: String,
     onPlay: (MediaEntry) -> Unit
 ) {
@@ -466,6 +657,7 @@ fun CatalogView(
                 items(finalItems) { item ->
                     MediaCard(
                         item = item,
+                        locked = item.isAdult && hideAdult,
                         modifier = Modifier.fillMaxWidth(),
                         onClick = { onPlay(item) }
                     )
@@ -478,6 +670,7 @@ fun CatalogView(
 @Composable
 fun MediaCard(
     item: MediaEntry,
+    locked: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
@@ -503,15 +696,15 @@ fun MediaCard(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "${item.country} • ${item.genre}",
-                color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF),
+                text = if (locked) "18+ • Skyddat innehåll" else "${item.country} • ${item.genre}",
+                color = if (locked) Color(0xFFFBBF24) else if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = item.title,
+                text = if (locked) "🔒 18+ Låst kanal" else item.title,
                 color = Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
@@ -525,23 +718,32 @@ fun MediaCard(
 @Composable
 fun SettingsView(
     initialMode: String,
+    initialFormat: String,
     initialM3u: String,
     initialServer: String,
     initialUser: String,
     initialPass: String,
-    onSave: (String, String, String, String, String) -> Unit
+    initialAdultLock: Boolean,
+    initialAdultPin: String,
+    onSave: (String, String, String, String, String, String, Boolean, String) -> Unit
 ) {
     var selectedMode by remember { mutableStateOf(initialMode) }
+    var selectedFormat by remember { mutableStateOf(initialFormat) }
     var m3u by remember { mutableStateOf(initialM3u) }
     var server by remember { mutableStateOf(initialServer) }
     var user by remember { mutableStateOf(initialUser) }
     var pass by remember { mutableStateOf(initialPass) }
+    var adultLock by remember { mutableStateOf(initialAdultLock) }
+    var adultPin by remember { mutableStateOf(initialAdultPin) }
+    var pinWarning by remember { mutableStateOf<String?>(null) }
 
     Surface(
         color = Color(0xFF151B28),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, Color(0x22FFFFFF)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
     ) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -550,7 +752,7 @@ fun SettingsView(
             Text(
                 text = "IPTV-källa",
                 color = Color.White,
-                fontSize = 22.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -600,8 +802,92 @@ fun SettingsView(
                 }
             }
 
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Strömformat för Live TV",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NavPill(
+                    label = "Auto (Smart växling)",
+                    selected = selectedFormat == "AUTO",
+                    onClick = { selectedFormat = "AUTO" }
+                )
+                NavPill(
+                    label = "Alltid HLS (.m3u8)",
+                    selected = selectedFormat == "HLS",
+                    onClick = { selectedFormat = "HLS" }
+                )
+                NavPill(
+                    label = "Alltid MPEG-TS (.ts)",
+                    selected = selectedFormat == "MPEG-TS",
+                    onClick = { selectedFormat = "MPEG-TS" }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Föräldrakontroll (18+ / Vuxenkanaler)",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NavPill(
+                    label = "Av (Olåst)",
+                    selected = !adultLock,
+                    onClick = {
+                        adultLock = false
+                        pinWarning = null
+                    }
+                )
+                NavPill(
+                    label = "På (Kräv lösenord)",
+                    selected = adultLock,
+                    onClick = { adultLock = true }
+                )
+            }
+
+            if (adultLock) {
+                OutlinedTextField(
+                    value = adultPin,
+                    onValueChange = {
+                        adultPin = it
+                        pinWarning = null
+                    },
+                    label = { Text("Lösenord / PIN-kod för 18+ (t.ex. 1234)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (pinWarning != null) {
+                    Text(
+                        text = pinWarning!!,
+                        color = Color(0xFFFBBF24),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
             Button(
-                onClick = { onSave(selectedMode, m3u.trim(), server.trim(), user.trim(), pass.trim()) },
+                onClick = {
+                    if (adultLock && adultPin.trim().isEmpty()) {
+                        pinWarning = "Ange ett lösenord/PIN-kod innan du sparar, eller välj Av."
+                    } else {
+                        onSave(
+                            selectedMode,
+                            selectedFormat,
+                            m3u.trim(),
+                            server.trim(),
+                            user.trim(),
+                            pass.trim(),
+                            adultLock,
+                            adultPin.trim()
+                        )
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.White,
                     contentColor = Color.Black
@@ -614,22 +900,51 @@ fun SettingsView(
     }
 }
 
+@kotlin.OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     item: MediaEntry,
+    streamFormatMode: String,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var resolutionText by remember { mutableStateOf("Laddar ström...") }
-    var audioTracks by remember { mutableStateOf<List<TrackOption>>(emptyList()) }
-    var subtitleTracks by remember { mutableStateOf<List<TrackOption>>(emptyList()) }
-    var selectedAudioIdx by remember { mutableStateOf(0) }
-    var selectedSubIdx by remember { mutableStateOf(-1) }
-    var currentTracksObj by remember { mutableStateOf<Tracks?>(null) }
+    var activeUrl by remember(item.url) { mutableStateOf(item.url) }
+    var preferSoftware by remember(item.url) { mutableStateOf(false) }
+    var triedFormatSwap by remember(item.url) { mutableStateOf(false) }
+    var autoDecoderFallbackTriggered by remember(item.url) { mutableStateOf(false) }
+    var resumePositionMs by remember(item.url) { mutableStateOf(0L) }
+    var resolutionText by remember(item.url) { mutableStateOf("Laddar ström...") }
+    var audioTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
+    var subtitleTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
+    var selectedAudioIdx by remember(item.url) { mutableStateOf(0) }
+    var selectedSubIdx by remember(item.url) { mutableStateOf(-1) }
+    var currentTracksObj by remember(item.url) { mutableStateOf<Tracks?>(null) }
 
-    val exoPlayer = remember(item.url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(item.url))
+    val exoPlayer = remember(activeUrl, preferSoftware) {
+        val codecSelector = if (preferSoftware) {
+            MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                val all = MediaCodecSelector.DEFAULT.getDecoderInfos(
+                    mimeType,
+                    requiresSecureDecoder,
+                    requiresTunnelingDecoder
+                )
+                val sw = all.filter { !it.hardwareAccelerated }
+                val hw = all.filter { it.hardwareAccelerated }
+                sw + hw
+            }
+        } else {
+            MediaCodecSelector.DEFAULT
+        }
+
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(codecSelector)
+
+        ExoPlayer.Builder(context, renderersFactory).build().apply {
+            setMediaItem(MediaItem.fromUri(activeUrl))
+            if (resumePositionMs > 0L) {
+                seekTo(resumePositionMs)
+            }
             prepare()
             playWhenReady = true
         }
@@ -645,7 +960,29 @@ fun PlayerScreen(
                         videoSize.height >= 720 -> "HD"
                         else -> "SD"
                     }
-                    resolutionText = "${videoSize.width}×${videoSize.height} ($quality)"
+                    val fmtTag = detectStreamTag(activeUrl)
+                    resolutionText = if (fmtTag != null) {
+                        "${videoSize.width}×${videoSize.height} ($quality • $fmtTag)"
+                    } else {
+                        "${videoSize.width}×${videoSize.height} ($quality)"
+                    }
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
+                    val swapped = swapStreamFormat(activeUrl)
+                    triedFormatSwap = true
+                    val nextTag = detectStreamTag(swapped) ?: "annat format"
+                    resolutionText = "Byter automatiskt till $nextTag..."
+                    activeUrl = swapped
+                } else if (!preferSoftware && !autoDecoderFallbackTriggered) {
+                    autoDecoderFallbackTriggered = true
+                    resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    resolutionText = "Byter till mjukvaruavkodare..."
+                    preferSoftware = true
+                } else {
+                    resolutionText = "Uppspelningsfel (${error.errorCodeName})"
                 }
             }
 
@@ -677,6 +1014,19 @@ fun PlayerScreen(
             exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
+    }
+
+    fun toggleStreamFormat() {
+        if (!canSwapFormat(activeUrl)) return
+        val swapped = swapStreamFormat(activeUrl)
+        val nextTag = detectStreamTag(swapped) ?: ""
+        resolutionText = "Växlar till $nextTag..."
+        activeUrl = swapped
+    }
+
+    fun toggleDecoder() {
+        resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+        preferSoftware = !preferSoftware
     }
 
     fun cycleAudio() {
@@ -721,15 +1071,17 @@ fun PlayerScreen(
                     useController = true
                 }
             },
+            update = { view ->
+                view.player = exoPlayer
+            },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Övre informationsrad med upplösning, ljud och undertexter
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
-                .background(Color(0x99000000))
+                .background(Color(0xAA000000))
                 .padding(horizontal = 24.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -753,7 +1105,20 @@ fun PlayerScreen(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val currentFormatTag = detectStreamTag(activeUrl)
+                if (currentFormatTag != null) {
+                    NavPill(
+                        label = "Format: $currentFormatTag",
+                        selected = false,
+                        onClick = { toggleStreamFormat() }
+                    )
+                }
+                NavPill(
+                    label = if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto",
+                    selected = preferSoftware,
+                    onClick = { toggleDecoder() }
+                )
                 val audioLabel = audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Standard"
                 NavPill(
                     label = "Ljud: $audioLabel",
@@ -771,6 +1136,72 @@ fun PlayerScreen(
     }
 }
 
+fun detectStreamTag(url: String): String? {
+    val lower = url.lowercase()
+    return when {
+        lower.endsWith(".m3u8") || lower.contains("output=m3u8") -> "HLS"
+        lower.endsWith(".ts") || lower.contains("output=ts") -> "MPEG-TS"
+        else -> null
+    }
+}
+
+fun canSwapFormat(url: String): Boolean {
+    return detectStreamTag(url) != null
+}
+
+fun swapStreamFormat(url: String): String {
+    return when {
+        url.endsWith(".m3u8", ignoreCase = true) -> url.dropLast(5) + ".ts"
+        url.endsWith(".ts", ignoreCase = true) -> url.dropLast(3) + ".m3u8"
+        url.contains("output=m3u8", ignoreCase = true) -> url.replace("output=m3u8", "output=ts", ignoreCase = true)
+        url.contains("output=ts", ignoreCase = true) -> url.replace("output=ts", "output=m3u8", ignoreCase = true)
+        else -> url
+    }
+}
+
+fun applyPlaylistFormat(url: String, format: String): String {
+    if (format == "AUTO") return url
+    return if (format == "MPEG-TS") {
+        url.replace("output=m3u8", "output=ts", ignoreCase = true)
+    } else {
+        url.replace("output=ts", "output=m3u8", ignoreCase = true)
+    }
+}
+
+fun applyStreamFormat(url: String, format: String): String {
+    if (format == "AUTO") return url
+    val isXtreamLive = url.contains("/live/", ignoreCase = true)
+    if (!isXtreamLive) return url
+    return if (format == "MPEG-TS") {
+        if (url.endsWith(".m3u8", ignoreCase = true)) {
+            url.dropLast(5) + ".ts"
+        } else {
+            url
+        }
+    } else {
+        if (url.endsWith(".ts", ignoreCase = true)) {
+            url.dropLast(3) + ".m3u8"
+        } else {
+            url
+        }
+    }
+}
+
+fun detectAdultContent(vararg texts: String): Boolean {
+    val keywords = listOf(
+        "18+", "+18", "xxx", "adult", "vuxen", "vuxna",
+        "erotic", "erotik", "porn", "nsfw", "playboy",
+        "hustler", "brazzers", "dorcel", "redlight", "penthouse", "vivid"
+    )
+    for (raw in texts) {
+        val lower = raw.lowercase()
+        if (keywords.any { lower.contains(it) }) return true
+        val tokens = lower.split(" ", "|", "-", ":", "/", "(", ")", "[", "]")
+        if (tokens.any { it == "sex" }) return true
+    }
+    return false
+}
+
 fun fetchText(urlString: String): String {
     val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
         connectTimeout = 15000
@@ -780,17 +1211,18 @@ fun fetchText(urlString: String): String {
     return conn.inputStream.bufferedReader().use { it.readText() }
 }
 
-fun fetchXtreamCatalog(server: String, user: String, pass: String): List<MediaEntry> {
+fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
     val base = server.trimEnd('/')
+    val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
     val result = mutableListOf<MediaEntry>()
 
-    // Live TV
     try {
         val liveJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_live_streams"))
         for (i in 0 until liveJson.length()) {
             val obj = liveJson.getJSONObject(i)
             val id = obj.optString("stream_id")
             val name = obj.optString("name", "Kanal")
+            val isAdultFlag = obj.optString("is_adult", "0") == "1" || detectAdultContent(name)
             val (country, genre) = extractCountryAndGenre(name)
             result.add(
                 MediaEntry(
@@ -798,14 +1230,14 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String): List<MediaEn
                     title = name,
                     country = country,
                     genre = genre,
-                    url = "$base/live/$user/$pass/$id.m3u8",
-                    type = MediaType.LIVE
+                    url = "$base/live/$user/$pass/$id.$extLive",
+                    type = MediaType.LIVE,
+                    isAdult = isAdultFlag
                 )
             )
         }
     } catch (_: Exception) { }
 
-    // Filmer (VOD)
     try {
         val vodJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams"))
         for (i in 0 until vodJson.length()) {
@@ -813,6 +1245,7 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String): List<MediaEn
             val id = obj.optString("stream_id")
             val name = obj.optString("name", "Film")
             val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
+            val isAdultFlag = obj.optString("is_adult", "0") == "1" || detectAdultContent(name)
             val (country, genre) = extractCountryAndGenre(name)
             result.add(
                 MediaEntry(
@@ -821,7 +1254,8 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String): List<MediaEn
                     country = country,
                     genre = genre,
                     url = "$base/movie/$user/$pass/$id.$ext",
-                    type = MediaType.MOVIE
+                    type = MediaType.MOVIE,
+                    isAdult = isAdultFlag
                 )
             )
         }
@@ -830,17 +1264,18 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String): List<MediaEn
     return result
 }
 
-fun parseM3u(content: String): List<MediaEntry> {
+fun parseM3u(content: String, format: String): List<MediaEntry> {
     val result = mutableListOf<MediaEntry>()
     val lines = content.lines()
     var currentName = "Okänd"
     var currentGroup = "Övrigt"
+    val groupRegex = Regex("""group-title="([^"]+)"""")
 
     for (rawLine in lines) {
         val line = rawLine.trim()
         if (line.isEmpty()) continue
         if (line.startsWith("#EXTINF", ignoreCase = true)) {
-            val groupMatch = Regex("group-title=\"([^\"]+)\"").find(line)
+            val groupMatch = groupRegex.find(line)
             currentGroup = groupMatch?.groupValues?.getOrNull(1)?.ifBlank { "Övrigt" } ?: "Övrigt"
             val commaIndex = line.lastIndexOf(',')
             currentName = if (commaIndex != -1 && commaIndex + 1 < line.length) {
@@ -857,14 +1292,17 @@ fun parseM3u(content: String): List<MediaEntry> {
                 else -> MediaType.LIVE
             }
             val (country, genre) = extractCountryAndGenre(currentGroup)
+            val isAdultFlag = detectAdultContent(currentName, currentGroup)
+            val finalUrl = if (type == MediaType.LIVE) applyStreamFormat(line, format) else line
             result.add(
                 MediaEntry(
                     id = "${result.size}_${currentName.hashCode()}",
                     title = currentName,
                     country = country,
                     genre = genre,
-                    url = line,
-                    type = type
+                    url = finalUrl,
+                    type = type,
+                    isAdult = isAdultFlag
                 )
             )
             currentName = "Okänd"
@@ -894,8 +1332,8 @@ fun extractCountryAndGenre(raw: String): Pair<String, String> {
 }
 
 fun demoCatalog(): List<MediaEntry> = listOf(
-    MediaEntry("1", "SVT / Testström HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE),
-    MediaEntry("2", "Nordic Sport 4K Demo", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.LIVE),
-    MediaEntry("3", "Big Buck Bunny (Demo)", "Internationellt", "Film", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE),
-    MediaEntry("4", "Sintel (Demo)", "Internationellt", "Serie", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.SERIES)
+    MediaEntry("1", "SVT / Testström HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false),
+    MediaEntry("2", "Nordic Sport 4K Demo", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.LIVE, false),
+    MediaEntry("3", "Big Buck Bunny (Demo)", "Internationellt", "Film", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE, false),
+    MediaEntry("4", "Sintel (Demo)", "Internationellt", "Serie", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.SERIES, false)
 )

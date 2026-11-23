@@ -43,20 +43,38 @@ data class TrackOption(
 )
 
 object CoverImageCache {
-    private val cache = LruCache<String, ImageBitmap>(48)
-    fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
-    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) { cache.put(key, bmp) }
+    @Volatile
+    var epoch: Int = 1
+    private val cache = LruCache<String, ImageBitmap>(36)
+
+    fun get(key: String): ImageBitmap? = synchronized(cache) {
+        cache.get("${epoch}_$key")
+    }
+
+    fun put(key: String, bmp: ImageBitmap) = synchronized(cache) {
+        cache.put("${epoch}_$key", bmp)
+    }
+
+    fun clearAndBump() = synchronized(cache) {
+        epoch += 1
+        cache.evictAll()
+    }
 }
 
 fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
+    if (urlString.isBlank()) return null
+    val cleanUrl = urlString.trim()
+    if (!cleanUrl.startsWith("http://", true) && !cleanUrl.startsWith("https://", true)) return null
+
     return try {
-        val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 4000
-            readTimeout = 5000
+        val conn = (URL(cleanUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 3500
+            readTimeout = 4500
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "ObsidianTV/2.2")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.3")
         }
-        if (conn.responseCode !in 200..299) {
+        val code = conn.responseCode
+        if (code !in 200..299) {
             conn.disconnect()
             return null
         }
@@ -68,25 +86,31 @@ fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
                 val read = input.read(buf)
                 if (read == -1) break
                 total += read
-                if (total > 2 * 1024 * 1024) return null
+                if (total > 1_500_000) return null
                 out.write(buf, 0, read)
             }
             out.toByteArray()
         }
         conn.disconnect()
         if (bytes.isEmpty()) return null
+
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
         var sample = 1
         while (bounds.outWidth / sample > maxDim || bounds.outHeight / sample > maxDim) {
             sample *= 2
         }
+
         BitmapFactory.decodeByteArray(
             bytes,
             0,
             bytes.size,
-            BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }
         )?.asImageBitmap()
     } catch (_: Exception) {
         null
@@ -154,7 +178,7 @@ suspend fun handleWebClient(
         var fLock = currentAdultLock
         var fPin = currentAdultPin
 
-        if (isPost && len > 0) {
+        if (isPost && len in 1..65536) {
             val body = ByteArray(len)
             var got = 0
             while (got < len) {
@@ -310,96 +334,126 @@ fun is4KTitle(vararg texts: String): Boolean {
 
 fun fetchText(urlString: String): String {
     val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 10000
-        readTimeout = 12000
-        setRequestProperty("User-Agent", "ObsidianTV/2.2")
+        connectTimeout = 8000
+        readTimeout = 10000
+        instanceFollowRedirects = true
+        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) ObsidianTV/2.3")
     }
-    return conn.inputStream.bufferedReader().use { it.readText() }
+    return try {
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            val sb = StringBuilder()
+            val buf = CharArray(4096)
+            var total = 0
+            val maxChars = 2_000_000
+            while (true) {
+                val r = reader.read(buf)
+                if (r == -1) break
+                total += r
+                if (total > maxChars) break
+                sb.append(buf, 0, r)
+            }
+            sb.toString()
+        }
+    } finally {
+        try {
+            conn.disconnect()
+        } catch (_: Exception) {
+        }
+    }
 }
 
 fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
-    val base = server.trimEnd('/')
+    val base = server.trim().trimEnd('/')
     val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
     val result = mutableListOf<MediaEntry>()
-    val maxPerType = 350
+    val maxPerType = 150
 
     try {
-        val liveJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_live_streams"))
-        val count = min(liveJson.length(), maxPerType)
-        for (i in 0 until count) {
-            val o = liveJson.getJSONObject(i)
-            val id = o.optString("stream_id")
-            val name = o.optString("name", "Kanal")
-            val (c, g) = extractCountryAndSubcategory(name, name)
-            result.add(
-                MediaEntry(
-                    id = "live_${i}_$id",
-                    title = name,
-                    country = c,
-                    genre = g,
-                    url = "$base/live/$user/$pass/$id.$extLive",
-                    type = MediaType.LIVE,
-                    isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
-                    imageUrl = o.optString("stream_icon", "").trim(),
-                    is4K = is4KTitle(name, g),
-                    orderIndex = i
+        val rawLive = fetchText("$base/player_api.php?username=$user&password=$pass&action=get_live_streams")
+        if (rawLive.trimStart().startsWith("[")) {
+            val liveJson = JSONArray(rawLive)
+            val count = min(liveJson.length(), maxPerType)
+            for (i in 0 until count) {
+                val o = liveJson.optJSONObject(i) ?: continue
+                val id = o.optString("stream_id")
+                val name = o.optString("name", "Kanal")
+                val (c, g) = extractCountryAndSubcategory(name, name)
+                result.add(
+                    MediaEntry(
+                        id = "live_${i}_$id",
+                        title = name,
+                        country = c,
+                        genre = g,
+                        url = "$base/live/$user/$pass/$id.$extLive",
+                        type = MediaType.LIVE,
+                        isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
+                        imageUrl = o.optString("stream_icon", "").trim(),
+                        is4K = is4KTitle(name, g),
+                        orderIndex = i
+                    )
                 )
-            )
+            }
         }
     } catch (_: Exception) {
     }
 
     try {
-        val vodJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams"))
-        val count = min(vodJson.length(), maxPerType)
-        for (i in 0 until count) {
-            val o = vodJson.getJSONObject(i)
-            val id = o.optString("stream_id")
-            val name = o.optString("name", "Film")
-            val ext = o.optString("container_extension", "mp4").ifBlank { "mp4" }
-            val cover = o.optString("stream_icon", "").ifBlank { o.optString("cover", "") }.trim()
-            val (c, g) = extractCountryAndSubcategory(name, name)
-            result.add(
-                MediaEntry(
-                    id = "vod_${i}_$id",
-                    title = name,
-                    country = c,
-                    genre = g,
-                    url = "$base/movie/$user/$pass/$id.$ext",
-                    type = MediaType.MOVIE,
-                    isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
-                    imageUrl = cover,
-                    is4K = is4KTitle(name, g),
-                    orderIndex = i
+        val rawVod = fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams")
+        if (rawVod.trimStart().startsWith("[")) {
+            val vodJson = JSONArray(rawVod)
+            val count = min(vodJson.length(), maxPerType)
+            for (i in 0 until count) {
+                val o = vodJson.optJSONObject(i) ?: continue
+                val id = o.optString("stream_id")
+                val name = o.optString("name", "Film")
+                val ext = o.optString("container_extension", "mp4").ifBlank { "mp4" }
+                val cover = o.optString("stream_icon", "").ifBlank { o.optString("cover", "") }.trim()
+                val (c, g) = extractCountryAndSubcategory(name, name)
+                result.add(
+                    MediaEntry(
+                        id = "vod_${i}_$id",
+                        title = name,
+                        country = c,
+                        genre = g,
+                        url = "$base/movie/$user/$pass/$id.$ext",
+                        type = MediaType.MOVIE,
+                        isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
+                        imageUrl = cover,
+                        is4K = is4KTitle(name, g),
+                        orderIndex = i
+                    )
                 )
-            )
+            }
         }
     } catch (_: Exception) {
     }
 
     try {
-        val serJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_series"))
-        val count = min(serJson.length(), maxPerType)
-        for (i in 0 until count) {
-            val o = serJson.getJSONObject(i)
-            val id = o.optString("series_id")
-            val name = o.optString("name", "Serie")
-            val cover = o.optString("cover", "").ifBlank { o.optString("stream_icon", "") }.trim()
-            val (c, g) = extractCountryAndSubcategory(name, name)
-            result.add(
-                MediaEntry(
-                    id = "ser_${i}_$id",
-                    title = name,
-                    country = c,
-                    genre = g,
-                    url = "$base/series/$user/$pass/$id.mp4",
-                    type = MediaType.SERIES,
-                    isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
-                    imageUrl = cover,
-                    is4K = is4KTitle(name, g),
-                    orderIndex = i
+        val rawSer = fetchText("$base/player_api.php?username=$user&password=$pass&action=get_series")
+        if (rawSer.trimStart().startsWith("[")) {
+            val serJson = JSONArray(rawSer)
+            val count = min(serJson.length(), maxPerType)
+            for (i in 0 until count) {
+                val o = serJson.optJSONObject(i) ?: continue
+                val id = o.optString("series_id")
+                val name = o.optString("name", "Serie")
+                val cover = o.optString("cover", "").ifBlank { o.optString("stream_icon", "") }.trim()
+                val (c, g) = extractCountryAndSubcategory(name, name)
+                result.add(
+                    MediaEntry(
+                        id = "ser_${i}_$id",
+                        title = name,
+                        country = c,
+                        genre = g,
+                        url = "$base/series/$user/$pass/$id.mp4",
+                        type = MediaType.SERIES,
+                        isAdult = o.optString("is_adult", "0") == "1" || detectAdultContent(name),
+                        imageUrl = cover,
+                        is4K = is4KTitle(name, g),
+                        orderIndex = i
+                    )
                 )
-            )
+            }
         }
     } catch (_: Exception) {
     }
@@ -415,8 +469,8 @@ fun parseM3u(content: String, format: String): List<MediaEntry> {
     val gReg = Regex("""group-title="([^"]+)"""")
     val lReg = Regex("""tvg-logo="([^"]+)"""")
 
-    for (raw in content.lines()) {
-        if (result.size >= 1050) break
+    for (raw in content.lineSequence()) {
+        if (result.size >= 450) break
         val line = raw.trim()
         if (line.isEmpty()) continue
         if (line.startsWith("#EXTINF", true)) {
@@ -479,7 +533,7 @@ fun extractCountryAndSubcategory(rawGroup: String, itemTitle: String): Pair<Stri
         }
     }
 
-    val combined = "$cleaned$itemTitle".lowercase()
+    val combined = "$cleaned $itemTitle".lowercase()
     val standardCategory = when {
         combined.contains("sport") || combined.contains("viaplay") || combined.contains("eurosport") || combined.contains("fotboll") || combined.contains("hockey") -> "Sport"
         combined.contains("news") || combined.contains("nyheter") || combined.contains("cnn") || combined.contains("bbc") || combined.contains("svt") -> "Nyheter"

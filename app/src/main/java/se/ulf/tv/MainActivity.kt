@@ -198,7 +198,6 @@ fun UlfTvApp() {
         }
     }
 
-    // Inbyggd webbserver på port 8099 (/add) så du kan klistra in länkar från dator/mobil
     DisposableEffect(Unit) {
         var serverSocket: ServerSocket? = null
         val job = scope.launch(Dispatchers.IO) {
@@ -252,7 +251,6 @@ fun UlfTvApp() {
                     }
                 }
             } catch (_: Exception) {
-                // Stängs ner när appen avslutas
             }
         }
         onDispose {
@@ -278,6 +276,10 @@ fun UlfTvApp() {
             onBack = { playingItem = null }
         )
         return
+    }
+
+    BackHandler(enabled = currentSection != NavSection.HOME && !showUnlockDialog) {
+        currentSection = NavSection.HOME
     }
 
     Box(
@@ -383,6 +385,7 @@ fun UlfTvApp() {
                     initialPass = xtPass,
                     initialAdultLock = adultLockEnabled,
                     initialAdultPin = adultPin,
+                    onBack = { currentSection = NavSection.HOME },
                     onSave = { newMode, newFormat, newM3u, newServer, newUser, newPass, newAdultLock, newAdultPin ->
                         mode = newMode
                         streamFormat = newFormat
@@ -601,7 +604,7 @@ fun HomeView(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "${featured.type.label.uppercase()} • ${featured.country} • ${featured.genre}",
+                            text = "${featured.type.label.uppercase()} • ${featured.country} •${featured.genre}",
                             color = Color(0xFF60A5FA),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -771,7 +774,7 @@ fun MediaCard(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = if (locked) "18+ • Skyddat innehåll" else "${item.country} • ${item.genre}",
+                text = if (locked) "18+ • Skyddat innehåll" else "${item.country} •${item.genre}",
                 color = if (locked) Color(0xFFFBBF24) else if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -801,6 +804,7 @@ fun SettingsView(
     initialPass: String,
     initialAdultLock: Boolean,
     initialAdultPin: String,
+    onBack: () -> Unit,
     onSave: (String, String, String, String, String, String, Boolean, String) -> Unit
 ) {
     var selectedMode by remember { mutableStateOf(initialMode) }
@@ -825,6 +829,19 @@ fun SettingsView(
             modifier = Modifier.padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NavPill(label = "← Tillbaka", selected = false, onClick = onBack)
+                Text(
+                    text = "Inställningar",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
             Surface(
                 color = Color(0xFF1E293B),
                 shape = RoundedCornerShape(14.dp),
@@ -851,7 +868,7 @@ fun SettingsView(
             Text(
                 text = "IPTV-källa",
                 color = Color.White,
-                fontSize = 20.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -896,6 +913,7 @@ fun SettingsView(
                         onValueChange = { pass = it },
                         label = { Text("Lösenord") },
                         singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -958,6 +976,7 @@ fun SettingsView(
                     },
                     label = { Text("Lösenord / PIN-kod för 18+ (t.ex. 1234)") },
                     singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (pinWarning != null) {
@@ -1013,670 +1032,4 @@ fun PlayerScreen(
     var autoDecoderFallbackTriggered by remember(item.url) { mutableStateOf(false) }
     var resumePositionMs by remember(item.url) { mutableStateOf(0L) }
     var resolutionText by remember(item.url) { mutableStateOf("Laddar ström...") }
-    var audioTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
-    var subtitleTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
-    var selectedAudioIdx by remember(item.url) { mutableStateOf(0) }
-    var selectedSubIdx by remember(item.url) { mutableStateOf(-1) }
-    var currentTracksObj by remember(item.url) { mutableStateOf<Tracks?>(null) }
-
-    val exoPlayer = remember(activeUrl, preferSoftware) {
-        val codecSelector = if (preferSoftware) {
-            MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-                val all = MediaCodecSelector.DEFAULT.getDecoderInfos(
-                    mimeType,
-                    requiresSecureDecoder,
-                    requiresTunnelingDecoder
-                )
-                val sw = all.filter { !it.hardwareAccelerated }
-                val hw = all.filter { it.hardwareAccelerated }
-                sw + hw
-            }
-        } else {
-            MediaCodecSelector.DEFAULT
-        }
-
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-            .setMediaCodecSelector(codecSelector)
-
-        ExoPlayer.Builder(context, renderersFactory).build().apply {
-            setMediaItem(MediaItem.fromUri(activeUrl))
-            if (resumePositionMs > 0L) {
-                seekTo(resumePositionMs)
-            }
-            prepare()
-            playWhenReady = true
-        }
-    }
-
-    DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                if (videoSize.width > 0 && videoSize.height > 0) {
-                    val quality = when {
-                        videoSize.height >= 2160 -> "4K UHD"
-                        videoSize.height >= 1080 -> "Full HD"
-                        videoSize.height >= 720 -> "HD"
-                        else -> "SD"
-                    }
-                    val fmtTag = detectStreamTag(activeUrl)
-                    resolutionText = if (fmtTag != null) {
-                        "${videoSize.width}×${videoSize.height} ($quality • $fmtTag)"
-                    } else {
-                        "${videoSize.width}×${videoSize.height} ($quality)"
-                    }
-                }
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
-                    val swapped = swapStreamFormat(activeUrl)
-                    triedFormatSwap = true
-                    val nextTag = detectStreamTag(swapped) ?: "annat format"
-                    resolutionText = "Byter automatiskt till $nextTag..."
-                    activeUrl = swapped
-                } else if (!preferSoftware && !autoDecoderFallbackTriggered) {
-                    autoDecoderFallbackTriggered = true
-                    resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    resolutionText = "Byter till mjukvaruavkodare..."
-                    preferSoftware = true
-                } else {
-                    resolutionText = "Uppspelningsfel (${error.errorCodeName})"
-                }
-            }
-
-            override fun onTracksChanged(tracks: Tracks) {
-                currentTracksObj = tracks
-                val audios = mutableListOf<TrackOption>()
-                val subs = mutableListOf<TrackOption>()
-                tracks.groups.forEachIndexed { gIndex, group ->
-                    if (group.type == C.TRACK_TYPE_AUDIO) {
-                        for (i in 0 until group.length) {
-                            val fmt = group.getTrackFormat(i)
-                            val lang = fmt.language ?: fmt.label ?: "Spår ${audios.size + 1}"
-                            audios.add(TrackOption(lang.uppercase(), gIndex, i))
-                        }
-                    } else if (group.type == C.TRACK_TYPE_TEXT) {
-                        for (i in 0 until group.length) {
-                            val fmt = group.getTrackFormat(i)
-                            val lang = fmt.language ?: fmt.label ?: "Text ${subs.size + 1}"
-                            subs.add(TrackOption(lang.uppercase(), gIndex, i))
-                        }
-                    }
-                }
-                audioTracks = audios
-                subtitleTracks = subs
-            }
-        }
-        exoPlayer.addListener(listener)
-        onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
-        }
-    }
-
-    fun toggleStreamFormat() {
-        if (!canSwapFormat(activeUrl)) return
-        val swapped = swapStreamFormat(activeUrl)
-        val nextTag = detectStreamTag(swapped) ?: ""
-        resolutionText = "Växlar till $nextTag..."
-        activeUrl = swapped
-    }
-
-    fun toggleDecoder() {
-        resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-        preferSoftware = !preferSoftware
-    }
-
-    fun cycleAudio() {
-        val tracks = currentTracksObj ?: return
-        if (audioTracks.isEmpty()) return
-        val next = (selectedAudioIdx + 1) % audioTracks.size
-        selectedAudioIdx = next
-        val chosen = audioTracks[next]
-        val group = tracks.groups[chosen.groupIndex].mediaTrackGroup
-        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
-            .buildUpon()
-            .setOverrideForType(TrackSelectionOverride(group, chosen.trackIndex))
-            .build()
-    }
-
-    fun cycleSubtitles() {
-        val tracks = currentTracksObj ?: return
-        if (subtitleTracks.isEmpty()) return
-        val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1
-        selectedSubIdx = next
-        val builder = exoPlayer.trackSelectionParameters.buildUpon()
-        if (next == -1) {
-            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-        } else {
-            val chosen = subtitleTracks[next]
-            val group = tracks.groups[chosen.groupIndex].mediaTrackGroup
-            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            builder.setOverrideForType(TrackSelectionOverride(group, chosen.trackIndex))
-        }
-        exoPlayer.trackSelectionParameters = builder.build()
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    ) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    player = exoPlayer
-                    useController = true
-                }
-            },
-            update = { view ->
-                view.player = exoPlayer
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopStart)
-                .background(Color(0xAA000000))
-                .padding(horizontal = 24.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                NavPill(label = "← Tillbaka", selected = false, onClick = onBack)
-                Column {
-                    Text(
-                        text = item.title,
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "$resolutionText • ${item.country} • ${item.genre}",
-                        color = Color(0xFF93C5FD),
-                        fontSize = 12.sp
-                    )
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val currentFormatTag = detectStreamTag(activeUrl)
-                if (currentFormatTag != null) {
-                    NavPill(
-                        label = "Format: $currentFormatTag",
-                        selected = false,
-                        onClick = { toggleStreamFormat() }
-                    )
-                }
-                NavPill(
-                    label = if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto",
-                    selected = preferSoftware,
-                    onClick = { toggleDecoder() }
-                )
-                val audioLabel = audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Standard"
-                NavPill(
-                    label = "Ljud: $audioLabel",
-                    selected = false,
-                    onClick = { cycleAudio() }
-                )
-                val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
-                NavPill(
-                    label = "Text: $subLabel",
-                    selected = false,
-                    onClick = { cycleSubtitles() }
-                )
-            }
-        }
-    }
-}
-
-fun getLocalIpAddress(): String {
-    try {
-        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return "192.168.11.22"
-        for (intf in interfaces) {
-            val addrs = intf.inetAddresses
-            for (addr in addrs) {
-                if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                    val ip = addr.hostAddress
-                    if (!ip.isNullOrBlank()) return ip
-                }
-            }
-        }
-    } catch (_: Exception) {
-    }
-    return "192.168.11.22"
-}
-
-suspend fun handleWebClient(
-    socket: Socket,
-    currentMode: String,
-    currentFormat: String,
-    currentM3u: String,
-    currentServer: String,
-    currentUser: String,
-    currentPass: String,
-    currentAdultLock: Boolean,
-    currentAdultPin: String,
-    onApplyConfig: suspend (String, String, String, String, String, String, Boolean, String) -> Unit
-) {
-    try {
-        socket.soTimeout = 10000
-        val input = socket.getInputStream()
-        val headerBytes = ByteArrayOutputStream()
-        var prev1 = 0
-        var prev2 = 0
-        var prev3 = 0
-        while (true) {
-            val b = input.read()
-            if (b == -1) break
-            headerBytes.write(b)
-            if (prev1 == '\r'.code && prev2 == '\n'.code && prev3 == '\r'.code && b == '\n'.code) {
-                break
-            }
-            prev1 = prev2
-            prev2 = prev3
-            prev3 = b
-        }
-        val headerText = headerBytes.toString("UTF-8")
-        if (headerText.isBlank()) {
-            socket.close()
-            return
-        }
-
-        val firstLine = headerText.lines().firstOrNull().orEmpty()
-        val isPost = firstLine.startsWith("POST", ignoreCase = true)
-        val contentLength = headerText.lines()
-            .firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
-            ?.substringAfter(":")
-            ?.trim()
-            ?.toIntOrNull() ?: 0
-
-        var savedBanner = false
-        var formMode = currentMode
-        var formFormat = currentFormat
-        var formM3u = currentM3u
-        var formServer = currentServer
-        var formUser = currentUser
-        var formPass = currentPass
-        var formAdultLock = currentAdultLock
-        var formAdultPin = currentAdultPin
-
-        if (isPost && contentLength > 0) {
-            val bodyBytes = ByteArray(contentLength)
-            var totalRead = 0
-            while (totalRead < contentLength) {
-                val read = input.read(bodyBytes, totalRead, contentLength - totalRead)
-                if (read == -1) break
-                totalRead += read
-            }
-            val bodyText = String(bodyBytes, 0, totalRead, Charsets.UTF_8)
-            val params = parseFormBody(bodyText)
-
-            formMode = params["mode"]?.ifBlank { "M3U" } ?: "M3U"
-            formFormat = params["format"]?.ifBlank { "AUTO" } ?: "AUTO"
-            formM3u = params["m3u"]?.trim().orEmpty()
-            formServer = params["server"]?.trim().orEmpty()
-            formUser = params["user"]?.trim().orEmpty()
-            formPass = params["pass"]?.trim().orEmpty()
-            formAdultPin = params["adult_pin"]?.trim().orEmpty()
-            formAdultLock = (params["adult_lock"] == "1") && formAdultPin.isNotEmpty()
-
-            onApplyConfig(
-                formMode,
-                formFormat,
-                formM3u,
-                formServer,
-                formUser,
-                formPass,
-                formAdultLock,
-                formAdultPin
-            )
-            savedBanner = true
-        }
-
-        val html = buildWebConfigHtml(
-            saved = savedBanner,
-            mode = formMode,
-            format = formFormat,
-            m3u = formM3u,
-            server = formServer,
-            user = formUser,
-            pass = formPass,
-            adultLock = formAdultLock,
-            adultPin = formAdultPin
-        )
-        val htmlBytes = html.toByteArray(Charsets.UTF_8)
-        val responseHeader = "HTTP/1.1 200 OK\r\n" +
-            "Content-Type: text/html; charset=UTF-8\r\n" +
-            "Content-Length: ${htmlBytes.size}\r\n" +
-            "Connection: close\r\n\r\n"
-
-        val out = socket.getOutputStream()
-        out.write(responseHeader.toByteArray(Charsets.UTF_8))
-        out.write(htmlBytes)
-        out.flush()
-    } catch (_: Exception) {
-    } finally {
-        try {
-            socket.close()
-        } catch (_: Exception) {
-        }
-    }
-}
-
-fun parseFormBody(body: String): Map<String, String> {
-    val map = mutableMapOf<String, String>()
-    if (body.isBlank()) return map
-    for (pair in body.split("&")) {
-        val idx = pair.indexOf('=')
-        if (idx > 0) {
-            val key = URLDecoder.decode(pair.substring(0, idx), "UTF-8")
-            val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
-            map[key] = value
-        }
-    }
-    return map
-}
-
-fun escapeHtml(text: String): String {
-    return text
-        .replace("&", "&amp;")
-        .replace("\"", "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-}
-
-fun buildWebConfigHtml(
-    saved: Boolean,
-    mode: String,
-    format: String,
-    m3u: String,
-    server: String,
-    user: String,
-    pass: String,
-    adultLock: Boolean,
-    adultPin: String
-): String {
-    val banner = if (saved) {
-        """<div class="ok">Sparat! Kanalerna synkas nu direkt på din TV.</div>"""
-    } else {
-        ""
-    }
-    return """
-<!DOCTYPE html>
-<html lang="sv">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ulf TV – Lägg till spellista</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0d14; color: #f8fafc; margin: 0; padding: 24px; }
-  .box { max-width: 560px; margin: 0 auto; background: #151b28; border: 1px solid #283248; border-radius: 18px; padding: 24px; }
-  h1 { margin-top: 0; font-size: 22px; }
-  label { display: block; margin-top: 14px; margin-bottom: 6px; font-size: 13px; color: #94a3b8; font-weight: 600; }
-  input, select { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 15px; }
-  button { margin-top: 22px; width: 100%; padding: 14px; border: none; border-radius: 999px; background: #fff; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; }
-  .ok { background: #14532d; border: 1px solid #22c55e; color: #dcfce7; padding: 12px 16px; border-radius: 12px; margin-bottom: 16px; font-weight: 600; }
-  .section { border-top: 1px solid #263044; margin-top: 18px; padding-top: 10px; }
-</style>
-</head>
-<body>
-<div class="box">
-  <h1>Ulf TV – Snabbinställning</h1>
-  $banner
-  <form method="POST" action="/add">
-    <label>Välj inloggningstyp</label>
-    <select name="mode">
-      <option value="M3U" ${if (mode == "M3U") "selected" else ""}>M3U-länk</option>
-      <option value="XTREAM" ${if (mode == "XTREAM") "selected" else ""}>Xtream Codes (Server + Användare + Lösenord)</option>
-    </select>
-
-    <div class="section">
-      <label>Alternativ 1: M3U-spellista URL</label>
-      <input type="text" name="m3u" placeholder="http://..." value="${escapeHtml(m3u)}">
-    </div>
-
-    <div class="section">
-      <label>Alternativ 2: Xtream Server-URL</label>
-      <input type="text" name="server" placeholder="http://server.com:8080" value="${escapeHtml(server)}">
-      <label>Xtream Användarnamn</label>
-      <input type="text" name="user" value="${escapeHtml(user)}">
-      <label>Xtream Lösenord</label>
-      <input type="text" name="pass" value="${escapeHtml(pass)}">
-    </div>
-
-    <div class="section">
-      <label>Strömformat (Live TV)</label>
-      <select name="format">
-        <option value="AUTO" ${if (format == "AUTO") "selected" else ""}>Auto (Smart växling HLS / MPEG-TS)</option>
-        <option value="HLS" ${if (format == "HLS") "selected" else ""}>Alltid HLS (.m3u8)</option>
-        <option value="MPEG-TS" ${if (format == "MPEG-TS") "selected" else ""}>Alltid MPEG-TS (.ts)</option>
-      </select>
-    </div>
-
-    <div class="section">
-      <label>Föräldrakontroll (18+ / Vuxenkanaler)</label>
-      <select name="adult_lock">
-        <option value="0" ${if (!adultLock) "selected" else ""}>Av (Olåst)</option>
-        <option value="1" ${if (adultLock) "selected" else ""}>På (Kräv PIN-kod)</option>
-      </select>
-      <label>PIN-kod för 18+</label>
-      <input type="text" name="adult_pin" placeholder="t.ex. 1234" value="${escapeHtml(adultPin)}">
-    </div>
-
-    <button type="submit">Spara &amp; skicka till TV</button>
-  </form>
-</div>
-</body>
-</html>
-""".trimIndent()
-}
-
-fun detectStreamTag(url: String): String? {
-    val lower = url.lowercase()
-    return when {
-        lower.endsWith(".m3u8") || lower.contains("output=m3u8") -> "HLS"
-        lower.endsWith(".ts") || lower.contains("output=ts") -> "MPEG-TS"
-        else -> null
-    }
-}
-
-fun canSwapFormat(url: String): Boolean {
-    return detectStreamTag(url) != null
-}
-
-fun swapStreamFormat(url: String): String {
-    return when {
-        url.endsWith(".m3u8", ignoreCase = true) -> url.dropLast(5) + ".ts"
-        url.endsWith(".ts", ignoreCase = true) -> url.dropLast(3) + ".m3u8"
-        url.contains("output=m3u8", ignoreCase = true) -> url.replace("output=m3u8", "output=ts", ignoreCase = true)
-        url.contains("output=ts", ignoreCase = true) -> url.replace("output=ts", "output=m3u8", ignoreCase = true)
-        else -> url
-    }
-}
-
-fun applyPlaylistFormat(url: String, format: String): String {
-    if (format == "AUTO") return url
-    return if (format == "MPEG-TS") {
-        url.replace("output=m3u8", "output=ts", ignoreCase = true)
-    } else {
-        url.replace("output=ts", "output=m3u8", ignoreCase = true)
-    }
-}
-
-fun applyStreamFormat(url: String, format: String): String {
-    if (format == "AUTO") return url
-    val isXtreamLive = url.contains("/live/", ignoreCase = true)
-    if (!isXtreamLive) return url
-    return if (format == "MPEG-TS") {
-        if (url.endsWith(".m3u8", ignoreCase = true)) {
-            url.dropLast(5) + ".ts"
-        } else {
-            url
-        }
-    } else {
-        if (url.endsWith(".ts", ignoreCase = true)) {
-            url.dropLast(3) + ".m3u8"
-        } else {
-            url
-        }
-    }
-}
-
-fun detectAdultContent(vararg texts: String): Boolean {
-    val keywords = listOf(
-        "18+", "+18", "xxx", "adult", "vuxen", "vuxna",
-        "erotic", "erotik", "porn", "nsfw", "playboy",
-        "hustler", "brazzers", "dorcel", "redlight", "penthouse", "vivid"
-    )
-    for (raw in texts) {
-        val lower = raw.lowercase()
-        if (keywords.any { lower.contains(it) }) return true
-        val tokens = lower.split(" ", "|", "-", ":", "/", "(", ")", "[", "]")
-        if (tokens.any { it == "sex" }) return true
-    }
-    return false
-}
-
-fun fetchText(urlString: String): String {
-    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15000
-        readTimeout = 20000
-        setRequestProperty("User-Agent", "UlfTV/2.0")
-    }
-    return conn.inputStream.bufferedReader().use { it.readText() }
-}
-
-fun fetchXtreamCatalog(server: String, user: String, pass: String, format: String): List<MediaEntry> {
-    val base = server.trimEnd('/')
-    val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
-    val result = mutableListOf<MediaEntry>()
-
-    try {
-        val liveJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_live_streams"))
-        for (i in 0 until liveJson.length()) {
-            val obj = liveJson.getJSONObject(i)
-            val id = obj.optString("stream_id")
-            val name = obj.optString("name", "Kanal")
-            val isAdultFlag = obj.optString("is_adult", "0") == "1" || detectAdultContent(name)
-            val (country, genre) = extractCountryAndGenre(name)
-            result.add(
-                MediaEntry(
-                    id = "live_$id",
-                    title = name,
-                    country = country,
-                    genre = genre,
-                    url = "$base/live/$user/$pass/$id.$extLive",
-                    type = MediaType.LIVE,
-                    isAdult = isAdultFlag
-                )
-            )
-        }
-    } catch (_: Exception) {
-    }
-
-    try {
-        val vodJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams"))
-        for (i in 0 until vodJson.length()) {
-            val obj = vodJson.getJSONObject(i)
-            val id = obj.optString("stream_id")
-            val name = obj.optString("name", "Film")
-            val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
-            val isAdultFlag = obj.optString("is_adult", "0") == "1" || detectAdultContent(name)
-            val (country, genre) = extractCountryAndGenre(name)
-            result.add(
-                MediaEntry(
-                    id = "vod_$id",
-                    title = name,
-                    country = country,
-                    genre = genre,
-                    url = "$base/movie/$user/$pass/$id.$ext",
-                    type = MediaType.MOVIE,
-                    isAdult = isAdultFlag
-                )
-            )
-        }
-    } catch (_: Exception) {
-    }
-
-    return result
-}
-
-fun parseM3u(content: String, format: String): List<MediaEntry> {
-    val result = mutableListOf<MediaEntry>()
-    val lines = content.lines()
-    var currentName = "Okänd"
-    var currentGroup = "Övrigt"
-    val groupRegex = Regex("""group-title="([^"]+)"""")
-
-    for (rawLine in lines) {
-        val line = rawLine.trim()
-        if (line.isEmpty()) continue
-        if (line.startsWith("#EXTINF", ignoreCase = true)) {
-            val groupMatch = groupRegex.find(line)
-            currentGroup = groupMatch?.groupValues?.getOrNull(1)?.ifBlank { "Övrigt" } ?: "Övrigt"
-            val commaIndex = line.lastIndexOf(',')
-            currentName = if (commaIndex != -1 && commaIndex + 1 < line.length) {
-                line.substring(commaIndex + 1).trim().ifBlank { "Okänd" }
-            } else {
-                "Okänd"
-            }
-        } else if (!line.startsWith("#")) {
-            val lowerGroup = currentGroup.lowercase()
-            val lowerUrl = line.lowercase()
-            val type = when {
-                lowerGroup.contains("serie") || lowerUrl.contains("/series/") -> MediaType.SERIES
-                lowerGroup.contains("film") || lowerGroup.contains("movie") || lowerGroup.contains("vod") || lowerUrl.contains("/movie/") -> MediaType.MOVIE
-                else -> MediaType.LIVE
-            }
-            val (country, genre) = extractCountryAndGenre(currentGroup)
-            val isAdultFlag = detectAdultContent(currentName, currentGroup)
-            val finalUrl = if (type == MediaType.LIVE) applyStreamFormat(line, format) else line
-            result.add(
-                MediaEntry(
-                    id = "${result.size}_${currentName.hashCode()}",
-                    title = currentName,
-                    country = country,
-                    genre = genre,
-                    url = finalUrl,
-                    type = type,
-                    isAdult = isAdultFlag
-                )
-            )
-            currentName = "Okänd"
-            currentGroup = "Övrigt"
-        }
-    }
-    return result
-}
-
-fun extractCountryAndGenre(raw: String): Pair<String, String> {
-    val cleaned = raw.trim()
-    val parts = cleaned.split("|", ":", "-", "/", limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
-    return if (parts.size == 2 && parts[0].length <= 14) {
-        parts[0] to parts[1]
-    } else {
-        val upper = cleaned.uppercase()
-        val country = when {
-            upper.startsWith("SE") || upper.contains("SWED") || upper.contains("SVERIGE") -> "Sverige"
-            upper.startsWith("NO") || upper.contains("NORW") || upper.contains("NORGE") -> "Norge"
-            upper.startsWith("DK") || upper.contains("DENM") || upper.contains("DANMARK") -> "Danmark"
-            upper.startsWith("UK") || upper.startsWith("GB") -> "UK"
-            upper.startsWith("US") -> "USA"
-            else -> "Internationellt"
-        }
-        country to (cleaned.ifBlank { "Allmänt" })
-    }
-}
-
-fun demoCatalog(): List<MediaEntry> = listOf(
-    MediaEntry("1", "SVT / Testström HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false),
-    MediaEntry("2", "Nordic Sport 4K Demo", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", MediaType.LIVE, false),
-    MediaEntry("3", "Big Buck Bunny (Demo)", "Internationellt", "Film", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", MediaType.MOVIE, false),
-    MediaEntry("4", "Sintel (Demo)", "Internationellt", "Serie", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4", MediaType.SERIES, false)
-)
+    var audioTracks by remember(

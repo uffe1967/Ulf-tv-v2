@@ -5,7 +5,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,6 +42,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
@@ -92,11 +96,7 @@ fun ObsidianApp() {
     val seriesItems = remember(visibleCatalog) { visibleCatalog.filter { it.type == MediaType.SERIES } }
 
     fun handleMediaClick(entry: MediaEntry) {
-        if (entry.type == MediaType.SERIES) {
-            selectedSeries = entry
-        } else {
-            playingItem = entry
-        }
+        if (entry.type == MediaType.SERIES) selectedSeries = entry else playingItem = entry
     }
 
     fun syncCatalog(useMode: String, useFormat: String, url: String, server: String, user: String, pass: String) {
@@ -216,23 +216,23 @@ fun ObsidianApp() {
     BackHandler(enabled = currentSection != NavSection.HOME && !showUnlockDialog) { currentSection = NavSection.HOME }
 
     Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF05070C), Color(0xFF0B0F1A), Color(0xFF030407))))) {
-        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp, vertical = 16.dp)) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(modifier = Modifier.size(10.dp).clip(RoundedCornerShape(50)).background(Color(0xFF38BDF8)))
-                    Text("OBSIDIAN", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.size(9.dp).clip(RoundedCornerShape(50)).background(Color(0xFF38BDF8)))
+                    Text("OBSIDIAN", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
                 }
                 Surface(color = Color(0xD9121622), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Color(0x2EFFFFFF))) {
-                    Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         NavSection.entries.forEach { s -> NavPill(s.label, currentSection == s) { currentSection = s } }
                     }
                 }
                 Surface(color = Color(0x99121622), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Color(0x1FFFFFFF))) {
-                    Text(statusText, color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+                    Text(statusText, color = Color(0xFF93C5FD), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             key(catalogVersion) {
                 when (currentSection) {
@@ -301,43 +301,36 @@ fun SeriesDetailScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(Color(0xFF05070C), Color(0xFF0B0F1A), Color(0xFF030407))))
-            .padding(horizontal = 36.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(horizontal = 32.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             NavPill("← Tillbaka", false, onBack)
             Column(modifier = Modifier.weight(1f)) {
-                Text(extractSeriesBaseTitle(series.title), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${series.country} • ${series.genre}", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(extractSeriesBaseTitle(series.title), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${series.country} • ${series.genre}", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
         if (loading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Hämtar säsonger och avsnitt...", color = Color(0xFF93C5FD), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("Hämtar säsonger och avsnitt...", color = Color(0xFF93C5FD), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         } else if (seasonsMap.isEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(errorText ?: "Hittade inga separata säsonger/avsnitt för denna serie.", color = Color(0xFFF87171), fontSize = 15.sp)
+                Text(errorText ?: "Hittade inga separata säsonger/avsnitt för denna serie.", color = Color(0xFFF87171), fontSize = 14.sp)
                 NavPill("▶ Försök spela direkt", true) {
                     onPlayEpisode(SeriesEpisode(series.id, 1, 1, series.title, series.url))
                 }
             }
         } else {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(seasonNumbers) { sNum ->
                     NavPill("Säsong $sNum", selectedSeason == sNum) { selectedSeason = sNum }
                 }
             }
-
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 24.dp)
-            ) {
-                items(episodes, key = { "${it.season}_${it.id}" }) { ep ->
-                    EpisodeRowItem(ep) { onPlayEpisode(ep) }
-                }
+            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+                items(episodes, key = { "${it.season}_${it.id}" }) { ep -> EpisodeRowItem(ep) { onPlayEpisode(ep) } }
             }
         }
     }
@@ -346,27 +339,27 @@ fun SeriesDetailScreen(
 @Composable
 fun EpisodeRowItem(ep: SeriesEpisode, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.015f else 1f, label = "epRow")
+    val scale by animateFloatAsState(if (focused) 1.012f else 1f, label = "epRow")
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(if (focused) Color(0xFF1F273B) else Color(0xFF141926))
-            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0x1AFFFFFF), RoundedCornerShape(14.dp))
+            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0x1AFFFFFF), RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 18.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Surface(color = Color(0xFF1E3A8A), shape = RoundedCornerShape(8.dp)) {
-            Text("S${ep.season} E${ep.episodeNum}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+        Surface(color = Color(0xFF1E3A8A), shape = RoundedCornerShape(6.dp)) {
+            Text("S${ep.season} E${ep.episodeNum}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
         }
-        Text(ep.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text("▶ Spela", color = if (focused) Color(0xFF38BDF8) else Color(0xFF9CA3AF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(ep.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text("▶ Spela", color = if (focused) Color(0xFF38BDF8) else Color(0xFF9CA3AF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -385,7 +378,7 @@ fun AppleTvHomeView(
     val defaultHero = remember(catalog) { catalog.firstOrNull { it.imageUrl.isNotBlank() } ?: catalog.firstOrNull() }
     var hero by remember(defaultHero) { mutableStateOf(defaultHero) }
 
-    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(22.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
         if (hero != null) item(key = "hero") { HeroShowcaseBanner(hero!!) { onPlay(hero!!) } }
         if (ultraHd.isNotEmpty()) item(key = "4k") { MediaShelfRow("4K Ultra HD", ultraHd, true, { hero = it }, onPlay) }
         if (movies.isNotEmpty()) item(key = "movies") { MediaShelfRow("Filmer", movies, true, { hero = it }, onPlay) }
@@ -398,83 +391,85 @@ fun AppleTvHomeView(
 fun LiveTvSplitView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
     if (items.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Inga Live TV-kanaler hittades.", color = Color(0xFF9CA3AF), fontSize = 17.sp)
+            Text("Inga Live TV-kanaler hittades.", color = Color(0xFF9CA3AF), fontSize = 16.sp)
         }
         return
     }
 
-    val defaultSubs = listOf("Sport", "Nyheter", "Film", "Musik", "Dokumentär", "Barn")
+    val defaultSubs = listOf("Alla", "Sport", "Nyheter", "Film", "Musik", "Dokumentär", "Barn")
     val countries = remember(items) { listOf("Alla länder") + items.map { it.country }.distinct().sorted() }
-    val subcategories = remember(items) { listOf("Alla underkategorier") + (defaultSubs + items.map { it.genre }.distinct().sorted()).distinct() }
+    val subcategories = remember(items) { (defaultSubs + items.map { it.genre }.distinct().sorted()).distinct().take(18) }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCountry by remember(items) { mutableStateOf("Alla länder") }
-    var selectedSubcategory by remember(items) { mutableStateOf("Alla underkategorier") }
-    var countryMenuOpen by remember { mutableStateOf(false) }
-    var subMenuOpen by remember { mutableStateOf(false) }
+    var selectedSubcategory by remember(items) { mutableStateOf("Alla") }
+    var filtered by remember(items) { mutableStateOf(items.take(250)) }
+    var totalMatches by remember(items) { mutableStateOf(items.size) }
 
-    val filtered = remember(items, searchQuery, selectedCountry, selectedSubcategory) {
+    LaunchedEffect(items, searchQuery, selectedCountry, selectedSubcategory) {
+        if (searchQuery.isNotEmpty()) delay(250)
         val q = searchQuery.trim().lowercase()
-        items.filter { entry ->
-            val okCountry = selectedCountry == "Alla länder" || entry.country == selectedCountry
-            val okSub = selectedSubcategory == "Alla underkategorier" ||
-                entry.genre.equals(selectedSubcategory, ignoreCase = true) ||
-                entry.title.contains(selectedSubcategory, ignoreCase = true)
-            val okSearch = q.isEmpty() ||
-                entry.title.lowercase().contains(q) ||
-                entry.country.lowercase().contains(q) ||
-                entry.genre.lowercase().contains(q)
-            okCountry && okSub && okSearch
+        val result = withContext(Dispatchers.Default) {
+            items.filter { entry ->
+                val okCountry = selectedCountry == "Alla länder" || entry.country == selectedCountry
+                val okSub = selectedSubcategory == "Alla" ||
+                    entry.genre.equals(selectedSubcategory, ignoreCase = true) ||
+                    entry.title.contains(selectedSubcategory, ignoreCase = true)
+                val okSearch = q.isEmpty() ||
+                    entry.title.lowercase().contains(q) ||
+                    entry.country.lowercase().contains(q) ||
+                    entry.genre.lowercase().contains(q)
+                okCountry && okSub && okSearch
+            }
         }
+        totalMatches = result.size
+        filtered = result.take(250)
     }
 
-    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        Surface(color = Color(0xCC111520), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.weight(0.35f).fillMaxHeight()) {
-            Column(modifier = Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Live TV – Filter & Sök", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Sök kanal...") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-
-                Text("Land", color = Color(0xFF9CA3AF), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    DropdownTriggerButton(selectedCountry, countryMenuOpen, Modifier.fillMaxWidth()) { countryMenuOpen = !countryMenuOpen; subMenuOpen = false }
-                    DropdownMenu(expanded = countryMenuOpen, onDismissRequest = { countryMenuOpen = false }, modifier = Modifier.background(Color(0xFF161922))) {
-                        countries.forEach { country ->
-                            DropdownMenuItem(
-                                text = { Text(country, color = if (country == selectedCountry) Color(0xFF60A5FA) else Color.White, fontWeight = if (country == selectedCountry) FontWeight.Bold else FontWeight.Normal) },
-                                onClick = { selectedCountry = country; countryMenuOpen = false }
-                            )
-                        }
+    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        // Vänsterpanel: Bläddringsbar landlista (D-pad-vänlig)
+        Surface(color = Color(0xCC111520), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.weight(0.26f).fillMaxHeight()) {
+            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                Text("Länder (${countries.size - 1})", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+                LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(countries, key = { it }) { country ->
+                        SideListItem(country, country == selectedCountry) { selectedCountry = country }
                     }
                 }
-
-                Text("Underkategori", color = Color(0xFF9CA3AF), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    DropdownTriggerButton(selectedSubcategory, subMenuOpen, Modifier.fillMaxWidth()) { subMenuOpen = !subMenuOpen; countryMenuOpen = false }
-                    DropdownMenu(expanded = subMenuOpen, onDismissRequest = { subMenuOpen = false }, modifier = Modifier.background(Color(0xFF161922))) {
-                        subcategories.forEach { sub ->
-                            DropdownMenuItem(
-                                text = { Text(sub, color = if (sub == selectedSubcategory) Color(0xFF60A5FA) else Color.White, fontWeight = if (sub == selectedSubcategory) FontWeight.Bold else FontWeight.Normal) },
-                                onClick = { selectedSubcategory = sub; subMenuOpen = false }
-                            )
-                        }
-                    }
-                }
-
-                if (searchQuery.isNotEmpty() || selectedCountry != "Alla länder" || selectedSubcategory != "Alla underkategorier") {
-                    NavPill("Återställ filter", false) { searchQuery = ""; selectedCountry = "Alla länder"; selectedSubcategory = "Alla underkategorier" }
-                }
-                Text("${filtered.size} kanaler matchar", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
-        Surface(color = Color(0xB30E121C), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Color(0x1EFFFFFF)), modifier = Modifier.weight(0.65f).fillMaxHeight()) {
-            if (filtered.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Inga kanaler matchar din sökning eller ditt filter.", color = Color(0xFF9CA3AF), fontSize = 15.sp)
+        // Högerpanel: Sök + Underkategorier + Kanallista
+        Column(modifier = Modifier.weight(0.74f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Sök kanal...", fontSize = 13.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                if (searchQuery.isNotEmpty() || selectedCountry != "Alla länder" || selectedSubcategory != "Alla") {
+                    NavPill("Rensa", false) { searchQuery = ""; selectedCountry = "Alla länder"; selectedSubcategory = "Alla" }
                 }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(filtered.take(250), key = { it.id }) { channel -> LiveChannelRowItem(channel) { onPlay(channel) } }
+                Text("$totalMatches kanaler", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(subcategories, key = { it }) { sub ->
+                    NavPill(sub, selectedSubcategory == sub) { selectedSubcategory = sub }
+                }
+            }
+
+            Surface(color = Color(0xB30E121C), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x1EFFFFFF)), modifier = Modifier.fillMaxSize()) {
+                if (filtered.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Inga kanaler matchar.", color = Color(0xFF9CA3AF), fontSize = 15.sp)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(filtered, key = { it.id }) { channel -> LiveChannelRowItem(channel) { onPlay(channel) } }
+                    }
                 }
             }
         }
@@ -482,33 +477,51 @@ fun LiveTvSplitView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
 }
 
 @Composable
+fun SideListItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (focused) Color.White else if (selected) Color(0x3838BDF8) else Color.Transparent)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else if (selected) Color(0x8838BDF8) else Color.Transparent, RoundedCornerShape(10.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 9.dp)
+    ) {
+        Text(label, color = if (focused) Color.Black else Color.White, fontSize = 13.sp, fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
 fun LiveChannelRowItem(item: MediaEntry, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.018f else 1f, label = "chRow")
+    val scale by animateFloatAsState(if (focused) 1.015f else 1f, label = "chRow")
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(if (focused) Color(0xFF1F273B) else Color(0xFF141926))
-            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0x1AFFFFFF), RoundedCornerShape(14.dp))
+            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0x1AFFFFFF), RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Box(modifier = Modifier.size(64.dp, 42.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF0A0D14))) {
-            AsyncCoverImage(item.imageUrl, item.title, ContentScale.Fit, 140, Modifier.fillMaxSize(), item.imageUrl.isBlank())
+        Box(modifier = Modifier.size(56.dp, 36.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF0A0D14))) {
+            AsyncCoverImage(item.imageUrl, item.title, ContentScale.Fit, 200, Modifier.fillMaxSize(), item.imageUrl.isBlank())
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(item.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Surface(color = if (item.is4K) Color(0xFFE50914) else Color(0xCCDC2626), shape = RoundedCornerShape(6.dp)) {
-            Text(if (item.is4K) "4K LIVE" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            Text(if (item.is4K) "4K" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
         }
     }
 }
@@ -517,16 +530,19 @@ fun LiveChannelRowItem(item: MediaEntry, onClick: () -> Unit) {
 fun CuratedMediaSectionView(items: List<MediaEntry>, sectionTypeLabel: String, emptyLabel: String, onPlay: (MediaEntry) -> Unit) {
     if (items.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(emptyLabel, color = Color(0xFF9CA3AF), fontSize = 17.sp)
+            Text(emptyLabel, color = Color(0xFF9CA3AF), fontSize = 16.sp)
         }
         return
     }
 
     var searchQuery by remember { mutableStateOf("") }
-    val filtered = remember(items, searchQuery) {
+    var filtered by remember(items) { mutableStateOf(items) }
+
+    LaunchedEffect(items, searchQuery) {
+        if (searchQuery.isNotEmpty()) delay(300)
         val q = searchQuery.trim().lowercase()
-        if (q.isEmpty()) items else items.filter {
-            it.title.lowercase().contains(q) || it.genre.lowercase().contains(q) || it.country.lowercase().contains(q)
+        filtered = if (q.isEmpty()) items else withContext(Dispatchers.Default) {
+            items.filter { it.title.lowercase().contains(q) || it.genre.lowercase().contains(q) || it.country.lowercase().contains(q) }
         }
     }
 
@@ -537,18 +553,18 @@ fun CuratedMediaSectionView(items: List<MediaEntry>, sectionTypeLabel: String, e
     val byGenre = remember(filtered) { filtered.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(4) }
     val byCountry = remember(filtered) { filtered.groupBy { it.country }.entries.sortedByDescending { it.value.size }.take(4) }
 
-    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(20.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
         item(key = "search") {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Sök bland $sectionTypeLabel...") }, singleLine = true, modifier = Modifier.width(360.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, placeholder = { Text("Sök bland $sectionTypeLabel...", fontSize = 13.sp) }, singleLine = true, modifier = Modifier.width(340.dp))
                 if (searchQuery.isNotEmpty()) {
                     NavPill("Rensa", false) { searchQuery = "" }
-                    Text("${filtered.size} träffar", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("${filtered.size} träffar", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
         if (filtered.isEmpty()) {
-            item(key = "empty") { Text("Inga $sectionTypeLabel matchar \"$searchQuery\".", color = Color(0xFF9CA3AF), fontSize = 16.sp) }
+            item(key = "empty") { Text("Inga $sectionTypeLabel matchar \"$searchQuery\".", color = Color(0xFF9CA3AF), fontSize = 15.sp) }
         } else {
             if (activeHero != null) item(key = "hero") { HeroShowcaseBanner(activeHero!!) { onPlay(activeHero!!) } }
             item(key = "latest") { MediaShelfRow("Senaste inlagt", latestItems, true, { activeHero = it }, onPlay) }
@@ -561,25 +577,6 @@ fun CuratedMediaSectionView(items: List<MediaEntry>, sectionTypeLabel: String, e
 }
 
 @Composable
-fun DropdownTriggerButton(label: String, expanded: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.03f else 1f, label = "dd")
-    Box(
-        modifier = modifier
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (focused) Color.White else Color(0xFF171B26))
-            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x33FFFFFF), RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 11.dp)
-    ) {
-        Text("$label  ${if (expanded) "▲" else "▼"}", color = if (focused) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
 fun HeroShowcaseBanner(item: MediaEntry, onPlay: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.012f else 1f, label = "heroScale")
@@ -587,34 +584,34 @@ fun HeroShowcaseBanner(item: MediaEntry, onPlay: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(250.dp)
+            .height(210.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .shadow(if (focused) 20.dp else 10.dp, RoundedCornerShape(22.dp))
-            .clip(RoundedCornerShape(22.dp))
-            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x22FFFFFF), RoundedCornerShape(22.dp))
+            .shadow(if (focused) 18.dp else 8.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x22FFFFFF), RoundedCornerShape(18.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable { onPlay() }
     ) {
-        AsyncCoverImage(item.imageUrl, item.title, ContentScale.Crop, 560, Modifier.fillMaxSize())
+        AsyncCoverImage(item.imageUrl, item.title, ContentScale.Crop, 900, Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xF006070B), Color(0xA606070B), Color(0x2606070B)))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x4006070B), Color(0xEB06070B)))))
 
-        Column(modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 30.dp, vertical = 20.dp).fillMaxWidth(0.75f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 26.dp, vertical = 16.dp).fillMaxWidth(0.75f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = Color(0x33FFFFFF), shape = RoundedCornerShape(6.dp)) {
-                    Text(item.type.label.uppercase(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                Surface(color = Color(0x33FFFFFF), shape = RoundedCornerShape(5.dp)) {
+                    Text(item.type.label.uppercase(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                 }
                 if (item.is4K) {
-                    Surface(color = Color(0xFFE50914), shape = RoundedCornerShape(6.dp)) {
-                        Text("4K ULTRA HD", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                    Surface(color = Color(0xFFE50914), shape = RoundedCornerShape(5.dp)) {
+                        Text("4K", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                     }
                 }
-                Text("${item.country}  •  ${item.genre}", color = Color(0xFFD1D5DB), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${item.country}  •  ${item.genre}", color = Color(0xFFD1D5DB), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(item.title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(item.title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Surface(color = Color.White, shape = RoundedCornerShape(8.dp)) {
-                Text(if (item.type == MediaType.SERIES) "▶  Välj säsong & avsnitt" else "▶  Spela nu", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 9.dp))
+                Text(if (item.type == MediaType.SERIES) "▶  Välj säsong & avsnitt" else "▶  Spela nu", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp))
             }
         }
     }
@@ -623,14 +620,14 @@ fun HeroShowcaseBanner(item: MediaEntry, onPlay: () -> Unit) {
 @Composable
 fun MediaShelfRow(title: String, items: List<MediaEntry>, isPoster: Boolean, onSelectFocus: (MediaEntry) -> Unit, onPlay: (MediaEntry) -> Unit) {
     Column {
-        Text(title, color = Color(0xFFF3F4F6), fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(6.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(title, color = Color(0xFFF3F4F6), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.id }) { item ->
                 if (isPoster) {
-                    NetflixPosterCard(item, Modifier.width(256.dp).height(144.dp), { onSelectFocus(item) }) { onPlay(item) }
+                    NetflixPosterCard(item, Modifier.width(192.dp).height(108.dp), { onSelectFocus(item) }) { onPlay(item) }
                 } else {
-                    PlexLiveCard(item, Modifier.width(256.dp).height(144.dp), { onSelectFocus(item) }) { onPlay(item) }
+                    PlexLiveCard(item, Modifier.width(192.dp).height(108.dp), { onSelectFocus(item) }) { onPlay(item) }
                 }
             }
         }
@@ -640,30 +637,30 @@ fun MediaShelfRow(title: String, items: List<MediaEntry>, isPoster: Boolean, onS
 @Composable
 fun NetflixPosterCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.06f else 1f, label = "posterCard")
+    val scale by animateFloatAsState(if (focused) 1.07f else 1f, label = "posterCard")
 
     Box(
         modifier = modifier
             .zIndex(if (focused) 1f else 0f)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .shadow(if (focused) 16.dp else 4.dp, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp))
+            .shadow(if (focused) 14.dp else 4.dp, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF10131C))
-            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x1EFFFFFF), RoundedCornerShape(14.dp))
+            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x1EFFFFFF), RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
             .focusable()
             .clickable { onClick() }
     ) {
-        AsyncCoverImage(item.imageUrl, item.title, ContentScale.Crop, 280, Modifier.fillMaxSize())
+        AsyncCoverImage(item.imageUrl, item.title, ContentScale.Crop, 480, Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x18000000), Color(0xE806070B)))))
         if (item.is4K) {
-            Surface(color = Color(0xE6E50914), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Text("4K", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            Surface(color = Color(0xE6E50914), shape = RoundedCornerShape(4.dp), modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                Text("4K", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
             }
         }
-        Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(item.genre, color = if (focused) Color(0xFF93C5FD) else Color(0xFFB0B7C6), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(9.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(item.genre, color = if (focused) Color(0xFF93C5FD) else Color(0xFFB0B7C6), fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -671,32 +668,32 @@ fun NetflixPosterCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Uni
 @Composable
 fun PlexLiveCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.06f else 1f, label = "liveCard")
+    val scale by animateFloatAsState(if (focused) 1.07f else 1f, label = "liveCard")
 
     Box(
         modifier = modifier
             .zIndex(if (focused) 1f else 0f)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .shadow(if (focused) 16.dp else 4.dp, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp))
+            .shadow(if (focused) 14.dp else 4.dp, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Brush.verticalGradient(if (focused) listOf(Color(0xFF1F2433), Color(0xFF10131C)) else listOf(Color(0xFF151822), Color(0xFF0B0D14))))
-            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x1EFFFFFF), RoundedCornerShape(14.dp))
+            .border(if (focused) 2.5.dp else 1.dp, if (focused) Color.White else Color(0x1EFFFFFF), RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
             .focusable()
             .clickable { onClick() }
     ) {
         if (item.imageUrl.isNotBlank()) {
-            AsyncCoverImage(item.imageUrl, item.title, ContentScale.Fit, 260, Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 46.dp), false)
+            AsyncCoverImage(item.imageUrl, item.title, ContentScale.Fit, 480, Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 36.dp), false)
         } else {
-            AsyncCoverImage("", item.title, ContentScale.Crop, 260, Modifier.fillMaxSize(), true)
+            AsyncCoverImage("", item.title, ContentScale.Crop, 480, Modifier.fillMaxSize(), true)
         }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x2A06070B), Color(0xEB06070B)))))
-        Surface(color = if (item.is4K) Color(0xE6E50914) else Color(0xCCDC2626), shape = RoundedCornerShape(6.dp), modifier = Modifier.align(Alignment.TopEnd).padding(9.dp)) {
-            Text(if (item.is4K) "4K LIVE" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+        Surface(color = if (item.is4K) Color(0xE6E50914) else Color(0xCCDC2626), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+            Text(if (item.is4K) "4K" else "LIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
         }
-        Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -733,7 +730,7 @@ fun AsyncCoverImage(url: String, title: String, contentScale: ContentScale, maxD
             Image(bitmap = bmp, contentDescription = title, contentScale = contentScale, modifier = Modifier.fillMaxSize())
         } else if (fallbackBackdrop) {
             val initials = title.split(" ", "-", "|").filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1).uppercase() }.ifBlank { "TV" }
-            Text(initials, color = Color(0x24FFFFFF), fontSize = 32.sp, fontWeight = FontWeight.Black)
+            Text(initials, color = Color(0x24FFFFFF), fontSize = 26.sp, fontWeight = FontWeight.Black)
         }
     }
 }
@@ -751,9 +748,9 @@ fun NavPill(label: String, selected: Boolean, onClick: () -> Unit) {
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 15.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        Text(label, color = if (focused) Color.Black else Color.White, fontSize = 13.sp, fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium)
+        Text(label, color = if (focused) Color.Black else Color.White, fontSize = 12.sp, fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
@@ -797,19 +794,19 @@ fun SettingsView(
     val isCurrentlyLocked = initialAdultLock && initialAdultPin.isNotBlank() && !adultUnlocked
 
     Surface(color = Color(0xFF11141D), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, Color(0x24FFFFFF)), modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        Column(modifier = Modifier.padding(26.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 NavPill("← Tillbaka", false, onBack)
-                Text("Inställningar", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Inställningar", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
-            Surface(color = Color(0xFF181D2B), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0xFF38BDF8)), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Snabbinmatning från dator eller mobil (samma Wi-Fi):", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Surface(color = Color(0xFF181D2B), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Color(0xFF38BDF8)), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Snabbinmatning från dator eller mobil (samma Wi-Fi):", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("http://$localIp:8099/add", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("http://$localIp:8099/add", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
                 }
             }
-            Text("IPTV-källa", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("IPTV-källa", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NavPill("M3U-länk", selectedMode == "M3U") { selectedMode = "M3U" }
                 NavPill("Xtream Codes", selectedMode == "XTREAM") { selectedMode = "XTREAM" }
@@ -823,15 +820,15 @@ fun SettingsView(
                     OutlinedTextField(value = pass, onValueChange = { pass = it }, label = { Text("Lösenord") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
                 }
             }
-            Text("Strömformat för Live TV", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("Strömformat för Live TV", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NavPill("Auto (Smart växling)", selectedFormat == "AUTO") { selectedFormat = "AUTO" }
                 NavPill("Alltid HLS (.m3u8)", selectedFormat == "HLS") { selectedFormat = "HLS" }
                 NavPill("Alltid MPEG-TS (.ts)", selectedFormat == "MPEG-TS") { selectedFormat = "MPEG-TS" }
             }
-            Surface(color = Color(0xFF161A26), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Föräldrakontroll (18+ / Vuxenkanaler)", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Surface(color = Color(0xFF161A26), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Föräldrakontroll (18+ / Vuxenkanaler)", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     if (isCurrentlyLocked) {
                         Text("18+-innehåll är dolt och skyddat med PIN-kod.", color = Color(0xFF9CA3AF), fontSize = 13.sp)
                         NavPill("Lås upp 18+ med PIN", true, onRequestUnlockAdult)
@@ -871,12 +868,22 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
     var triedFormatSwap by remember(item.url) { mutableStateOf(false) }
     var autoDecoderFallback by remember(item.url) { mutableStateOf(false) }
     var resumeMs by remember(item.url) { mutableStateOf(0L) }
-    var resolutionText by remember(item.url) { mutableStateOf("Laddar ström...") }
+    var resolutionText by remember(item.url) { mutableStateOf("Laddar...") }
     var audioTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
     var subtitleTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
     var selectedAudioIdx by remember(item.url) { mutableStateOf(0) }
     var selectedSubIdx by remember(item.url) { mutableStateOf(-1) }
     var currentTracksObj by remember(item.url) { mutableStateOf<Tracks?>(null) }
+
+    var showOverlay by remember { mutableStateOf(true) }
+    var overlayBump by remember { mutableStateOf(0) }
+
+    LaunchedEffect(showOverlay, overlayBump) {
+        if (showOverlay) {
+            delay(4000)
+            showOverlay = false
+        }
+    }
 
     val exoPlayer = remember(activeUrl, preferSoftware) {
         val selector = if (preferSoftware) {
@@ -898,20 +905,21 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(s: VideoSize) {
                 if (s.width > 0 && s.height > 0) {
-                    val q = when { s.height >= 2160 -> "4K UHD"; s.height >= 1080 -> "Full HD"; s.height >= 720 -> "HD"; else -> "SD" }
+                    val q = when { s.height >= 2160 -> "4K"; s.height >= 1080 -> "1080p"; s.height >= 720 -> "720p"; else -> "SD" }
                     val tag = detectStreamTag(activeUrl)
-                    resolutionText = if (tag != null) "${s.width}×${s.height} ($q • $tag)" else "${s.width}×${s.height} ($q)"
+                    resolutionText = if (tag != null) "$q • $tag" else q
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
+                showOverlay = true; overlayBump++
                 if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
                     val swapped = swapStreamFormat(activeUrl); triedFormatSwap = true
-                    resolutionText = "Byter automatiskt till ${detectStreamTag(swapped) ?: "annat format"}..."
+                    resolutionText = "Byter format..."
                     activeUrl = swapped
                 } else if (!preferSoftware && !autoDecoderFallback) {
                     autoDecoderFallback = true; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    resolutionText = "Byter till mjukvaruavkodare..."; preferSoftware = true
-                } else resolutionText = "Uppspelningsfel (${error.errorCodeName})"
+                    resolutionText = "Byter till SW-avkodare..."; preferSoftware = true
+                } else resolutionText = "Fel (${error.errorCodeName})"
             }
             override fun onTracksChanged(tracks: Tracks) {
                 currentTracksObj = tracks
@@ -930,34 +938,59 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
         onDispose { exoPlayer.removeListener(listener); exoPlayer.release() }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } }, update = { it.player = exoPlayer }, modifier = Modifier.fillMaxSize())
-        Row(modifier = Modifier.fillMaxWidth().align(Alignment.TopStart).background(Color(0xAA000000)).padding(horizontal = 24.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                NavPill("← Tillbaka", false, onBack)
-                Column {
-                    Text(item.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text("$resolutionText • ${item.country} • ${item.genre}", color = Color(0xFF93C5FD), fontSize = 12.sp)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .focusable()
+            .clickable { showOverlay = !showOverlay; overlayBump++ }
+    ) {
+        AndroidView(
+            factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true; controllerShowTimeoutMs = 4000 } },
+            update = { it.player = exoPlayer },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        AnimatedVisibility(
+            visible = showOverlay,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.fillMaxWidth().align(Alignment.TopStart)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0x99000000))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    NavPill("←", false, onBack)
+                    Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("• $resolutionText", color = Color(0xFF93C5FD), fontSize = 11.sp, maxLines = 1)
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val tag = detectStreamTag(activeUrl)
-                if (tag != null) NavPill("Format: $tag", false) { val sw = swapStreamFormat(activeUrl); resolutionText = "Växlar till ${detectStreamTag(sw) ?: ""}..."; activeUrl = sw }
-                NavPill(if (preferSoftware) "Avkodare: SW" else "Avkodare: Auto", preferSoftware) { resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
-                NavPill("Ljud: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Standard"}", false) {
-                    val t = currentTracksObj ?: return@NavPill
-                    if (audioTracks.isEmpty()) return@NavPill
-                    val next = (selectedAudioIdx + 1) % audioTracks.size; selectedAudioIdx = next; val c = audioTracks[next]
-                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)).build()
-                }
-                val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
-                NavPill("Text: $subLabel", false) {
-                    val t = currentTracksObj ?: return@NavPill
-                    if (subtitleTracks.isEmpty()) return@NavPill
-                    val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1; selectedSubIdx = next
-                    val b = exoPlayer.trackSelectionParameters.buildUpon()
-                    if (next == -1) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) else { val c = subtitleTracks[next]; b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false); b.setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)) }
-                    exoPlayer.trackSelectionParameters = b.build()
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val tag = detectStreamTag(activeUrl)
+                    if (tag != null) NavPill(tag, false) { overlayBump++; activeUrl = swapStreamFormat(activeUrl) }
+                    NavPill(if (preferSoftware) "SW" else "HW", preferSoftware) { overlayBump++; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
+                    NavPill("Ljud: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Std"}", false) {
+                        overlayBump++
+                        val t = currentTracksObj ?: return@NavPill
+                        if (audioTracks.isEmpty()) return@NavPill
+                        val next = (selectedAudioIdx + 1) % audioTracks.size; selectedAudioIdx = next; val c = audioTracks[next]
+                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)).build()
+                    }
+                    val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
+                    NavPill("Text: $subLabel", false) {
+                        overlayBump++
+                        val t = currentTracksObj ?: return@NavPill
+                        if (subtitleTracks.isEmpty()) return@NavPill
+                        val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1; selectedSubIdx = next
+                        val b = exoPlayer.trackSelectionParameters.buildUpon()
+                        if (next == -1) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) else { val c = subtitleTracks[next]; b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false); b.setOverrideForType(TrackSelectionOverride(t.groups[c.groupIndex].mediaTrackGroup, c.trackIndex)) }
+                        exoPlayer.trackSelectionParameters = b.build()
+                    }
                 }
             }
         }

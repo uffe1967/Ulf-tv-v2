@@ -1,11 +1,15 @@
 package se.ulf.tv
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.LruCache
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,9 +52,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -57,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -82,6 +93,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import java.net.URLDecoder
+import kotlin.math.abs
 
 enum class MediaType(val label: String) {
     LIVE("Live TV"),
@@ -104,7 +116,8 @@ data class MediaEntry(
     val genre: String,
     val url: String,
     val type: MediaType,
-    val isAdult: Boolean = false
+    val isAdult: Boolean = false,
+    val imageUrl: String = ""
 )
 
 data class TrackOption(
@@ -112,6 +125,16 @@ data class TrackOption(
     val groupIndex: Int,
     val trackIndex: Int
 )
+
+object CoverImageCache {
+    private val cache = LruCache<String, ImageBitmap>(80)
+
+    fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
+
+    fun put(key: String, bitmap: ImageBitmap) {
+        synchronized(cache) { cache.put(key, bitmap) }
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,23 +165,15 @@ fun UlfTvApp() {
     var adultPin by remember { mutableStateOf(prefs.getString("adult_pin", "") ?: "") }
     var adultUnlocked by remember { mutableStateOf(false) }
     var showUnlockDialog by remember { mutableStateOf(false) }
-    var pendingAdultItem by remember { mutableStateOf<MediaEntry?>(null) }
 
     var catalog by remember { mutableStateOf(demoCatalog()) }
     var currentSection by remember { mutableStateOf(NavSection.HOME) }
     var playingItem by remember { mutableStateOf<MediaEntry?>(null) }
-    var statusText by remember { mutableStateOf("Webbsida: http://$localIp:8099/add") }
+    var statusText by remember { mutableStateOf("http://$localIp:8099/add") }
 
     val isAdultRestricted = adultLockEnabled && adultPin.isNotBlank() && !adultUnlocked
-    val hasAdultItems = remember(catalog) { catalog.any { it.isAdult } }
-
-    fun handleSelectMedia(entry: MediaEntry) {
-        if (entry.isAdult && isAdultRestricted) {
-            pendingAdultItem = entry
-            showUnlockDialog = true
-        } else {
-            playingItem = entry
-        }
+    val visibleCatalog = remember(catalog, isAdultRestricted) {
+        if (isAdultRestricted) catalog.filterNot { it.isAdult } else catalog
     }
 
     fun syncCatalog(
@@ -170,7 +185,7 @@ fun UlfTvApp() {
         pass: String
     ) {
         scope.launch {
-            statusText = "Synkar kanaler, filmer och serier ($useFormat)..."
+            statusText = "Synkar ($useFormat)..."
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     if (useMode == "XTREAM" && server.isNotBlank() && user.isNotBlank()) {
@@ -187,10 +202,10 @@ fun UlfTvApp() {
                     val liveCount = loaded.count { it.type == MediaType.LIVE }
                     val movieCount = loaded.count { it.type == MediaType.MOVIE }
                     val seriesCount = loaded.count { it.type == MediaType.SERIES }
-                    statusText = "$liveCount Live • $movieCount Filmer • $seriesCount Serier ($useFormat)"
+                    statusText = "$liveCount Live • $movieCount Filmer • $seriesCount Serier"
                 } else {
                     catalog = demoCatalog()
-                    statusText = "Inga strömmar hittades – visar demokatalog"
+                    statusText = "Demoläge • http://$localIp:8099/add"
                 }
             } catch (e: Exception) {
                 statusText = "Kunde inte ladda: ${e.message ?: "Kontrollera adressen"}"
@@ -287,93 +302,82 @@ fun UlfTvApp() {
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Color(0xFF0A0D14), Color(0xFF111827), Color(0xFF090B10))
+                    colors = listOf(Color(0xFF05070C), Color(0xFF0B101B), Color(0xFF040609))
                 )
             )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 36.dp, vertical = 22.dp)
+                .padding(horizontal = 40.dp, vertical = 20.dp)
         ) {
+            // Apple TV-inspirerad svävande toppmeny (helt ren från 18+-knappar)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Text(
+                    text = "ULF TV",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 2.5.sp
+                )
+
+                Surface(
+                    color = Color(0x99161C29),
+                    shape = RoundedCornerShape(50),
+                    border = BorderStroke(1.dp, Color(0x28FFFFFF))
                 ) {
-                    Text(
-                        text = "ULF TV",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.5.sp
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    NavSection.entries.forEach { section ->
-                        NavPill(
-                            label = section.label,
-                            selected = currentSection == section,
-                            onClick = { currentSection = section }
-                        )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        NavSection.entries.forEach { section ->
+                            NavPill(
+                                label = section.label,
+                                selected = currentSection == section,
+                                onClick = { currentSection = section }
+                            )
+                        }
                     }
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (adultLockEnabled && adultPin.isNotBlank() && hasAdultItems) {
-                        NavPill(
-                            label = if (adultUnlocked) "🔓 Lås 18+" else "🔒 Lås upp 18+",
-                            selected = adultUnlocked,
-                            onClick = {
-                                if (adultUnlocked) {
-                                    adultUnlocked = false
-                                } else {
-                                    pendingAdultItem = null
-                                    showUnlockDialog = true
-                                }
-                            }
-                        )
-                    }
-                    Text(
-                        text = statusText,
-                        color = Color(0xFF9CA3AF),
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+
+                Text(
+                    text = statusText,
+                    color = Color(0xFF8E99AD),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             when (currentSection) {
                 NavSection.HOME -> HomeView(
-                    catalog = if (isAdultRestricted) catalog.filterNot { it.isAdult } else catalog,
-                    hideAdult = isAdultRestricted,
-                    onPlay = ::handleSelectMedia
+                    catalog = visibleCatalog,
+                    onPlay = { playingItem = it }
                 )
                 NavSection.LIVE -> CatalogView(
-                    items = catalog.filter { it.type == MediaType.LIVE },
-                    hideAdult = isAdultRestricted,
+                    items = visibleCatalog.filter { it.type == MediaType.LIVE },
+                    mediaType = MediaType.LIVE,
                     emptyLabel = "Inga Live TV-kanaler hittades.",
-                    onPlay = ::handleSelectMedia
+                    onPlay = { playingItem = it }
                 )
                 NavSection.MOVIES -> CatalogView(
-                    items = catalog.filter { it.type == MediaType.MOVIE },
-                    hideAdult = isAdultRestricted,
+                    items = visibleCatalog.filter { it.type == MediaType.MOVIE },
+                    mediaType = MediaType.MOVIE,
                     emptyLabel = "Inga filmer hittades i spellistan.",
-                    onPlay = ::handleSelectMedia
+                    onPlay = { playingItem = it }
                 )
                 NavSection.SERIES -> CatalogView(
-                    items = catalog.filter { it.type == MediaType.SERIES },
-                    hideAdult = isAdultRestricted,
+                    items = visibleCatalog.filter { it.type == MediaType.SERIES },
+                    mediaType = MediaType.SERIES,
                     emptyLabel = "Inga serier hittades i spellistan.",
-                    onPlay = ::handleSelectMedia
+                    onPlay = { playingItem = it }
                 )
                 NavSection.SETTINGS -> SettingsView(
                     localIp = localIp,
@@ -385,6 +389,9 @@ fun UlfTvApp() {
                     initialPass = xtPass,
                     initialAdultLock = adultLockEnabled,
                     initialAdultPin = adultPin,
+                    adultUnlocked = adultUnlocked,
+                    onRequestUnlockAdult = { showUnlockDialog = true },
+                    onLockAdultNow = { adultUnlocked = false },
                     onBack = { currentSection = NavSection.HOME },
                     onSave = { newMode, newFormat, newM3u, newServer, newUser, newPass, newAdultLock, newAdultPin ->
                         mode = newMode
@@ -395,7 +402,7 @@ fun UlfTvApp() {
                         xtPass = newPass
                         adultLockEnabled = newAdultLock
                         adultPin = newAdultPin
-                        if (newAdultLock) {
+                        if (newAdultLock && !adultUnlocked) {
                             adultUnlocked = false
                         }
                         prefs.edit()
@@ -416,27 +423,131 @@ fun UlfTvApp() {
         }
 
         if (showUnlockDialog) {
-            BackHandler {
-                showUnlockDialog = false
-                pendingAdultItem = null
-            }
+            BackHandler { showUnlockDialog = false }
             PinUnlockOverlay(
                 expectedPin = adultPin,
                 onUnlocked = {
                     adultUnlocked = true
                     showUnlockDialog = false
-                    val toPlay = pendingAdultItem
-                    pendingAdultItem = null
-                    if (toPlay != null) {
-                        playingItem = toPlay
-                    }
                 },
-                onDismiss = {
-                    showUnlockDialog = false
-                    pendingAdultItem = null
-                }
+                onDismiss = { showUnlockDialog = false }
             )
         }
+    }
+}
+
+@Composable
+fun AsyncCoverImage(
+    url: String,
+    title: String,
+    contentScale: ContentScale,
+    maxDimension: Int,
+    modifier: Modifier = Modifier,
+    fallbackBackdrop: Boolean = true
+) {
+    val cacheKey = "${url}_$maxDimension"
+    var bitmap by remember(cacheKey) { mutableStateOf(CoverImageCache.get(cacheKey)) }
+
+    LaunchedEffect(cacheKey) {
+        if (bitmap == null && url.isNotBlank() && (url.startsWith("http://", true) || url.startsWith("https://", true))) {
+            val loaded = withContext(Dispatchers.IO) {
+                loadScaledBitmap(url, maxDimension)
+            }
+            if (loaded != null) {
+                CoverImageCache.put(cacheKey, loaded)
+                bitmap = loaded
+            }
+        }
+    }
+
+    val fallbackBrush = remember(title) {
+        val palettes = listOf(
+            listOf(Color(0xFF1A2540), Color(0xFF0D1322)),
+            listOf(Color(0xFF2B1C34), Color(0xFF120C18)),
+            listOf(Color(0xFF142F2E), Color(0xFF0A1718)),
+            listOf(Color(0xFF33201E), Color(0xFF160E0D)),
+            listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+        )
+        val idx = abs(title.hashCode()) % palettes.size
+        Brush.linearGradient(palettes[idx])
+    }
+
+    Box(
+        modifier = modifier.then(
+            if (fallbackBackdrop) Modifier.background(fallbackBrush) else Modifier
+        ),
+        contentAlignment = Alignment.Center
+    ) {
+        val currentBitmap = bitmap
+        if (currentBitmap != null) {
+            Image(
+                bitmap = currentBitmap,
+                contentDescription = title,
+                contentScale = contentScale,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (fallbackBackdrop) {
+            val initials = title
+                .split(" ", "-", "|")
+                .filter { it.isNotBlank() }
+                .take(2)
+                .joinToString("") { it.take(1).uppercase() }
+                .ifBlank { "TV" }
+            Text(
+                text = initials,
+                color = Color(0x26FFFFFF),
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 2.sp
+            )
+        }
+    }
+}
+
+fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
+    return try {
+        val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 5000
+            readTimeout = 7000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "UlfTV/2.0")
+        }
+        if (conn.responseCode !in 200..299) {
+            conn.disconnect()
+            return null
+        }
+        val bytes = conn.inputStream.use { input ->
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            var total = 0
+            val maxBytes = 5 * 1024 * 1024
+            while (true) {
+                val read = input.read(buf)
+                if (read == -1) break
+                total += read
+                if (total > maxBytes) return null
+                out.write(buf, 0, read)
+            }
+            out.toByteArray()
+        }
+        conn.disconnect()
+        if (bytes.isEmpty()) return null
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > maxDim || bounds.outHeight / sampleSize > maxDim) {
+            sampleSize *= 2
+        }
+
+        val decodeOpts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)?.asImageBitmap()
+    } catch (_: Exception) {
+        null
     }
 }
 
@@ -452,28 +563,28 @@ fun PinUnlockOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xCC000000))
+            .background(Color(0xD9000000))
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            color = Color(0xFF161D2B),
-            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF141B29),
+            shape = RoundedCornerShape(24.dp),
             border = BorderStroke(1.5.dp, Color(0x44FFFFFF)),
             modifier = Modifier.width(420.dp)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(26.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "🔒 18+ / Vuxenkanaler låsta",
+                    text = "Lås upp 18+ / Vuxenkanaler",
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Ange ditt lösenord för att låsa upp 18+-innehåll.",
+                    text = "Ange din PIN-kod för att visa vuxeninnehåll och ändra föräldrakontrollen.",
                     color = Color(0xFF9CA3AF),
                     fontSize = 14.sp
                 )
@@ -541,15 +652,20 @@ fun NavPill(
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(targetValue = if (focused) 1.05f else 1f, label = "pillScale")
     val bg = when {
         focused -> Color.White
-        selected -> Color(0x33FFFFFF)
+        selected -> Color(0x38FFFFFF)
         else -> Color.Transparent
     }
     val textColor = if (focused) Color.Black else Color.White
 
     Box(
         modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(50))
             .background(bg)
             .border(
@@ -574,462 +690,156 @@ fun NavPill(
 @Composable
 fun HomeView(
     catalog: List<MediaEntry>,
-    hideAdult: Boolean,
     onPlay: (MediaEntry) -> Unit
 ) {
-    val featured = catalog.firstOrNull()
-    val live = remember(catalog) { catalog.filter { it.type == MediaType.LIVE }.take(20) }
-    val movies = remember(catalog) { catalog.filter { it.type == MediaType.MOVIE }.take(20) }
-    val series = remember(catalog) { catalog.filter { it.type == MediaType.SERIES }.take(20) }
+    val movies = remember(catalog) { catalog.filter { it.type == MediaType.MOVIE }.take(24) }
+    val series = remember(catalog) { catalog.filter { it.type == MediaType.SERIES }.take(24) }
+    val live = remember(catalog) { catalog.filter { it.type == MediaType.LIVE }.take(24) }
+
+    val defaultFeatured = remember(catalog) {
+        catalog.firstOrNull { it.imageUrl.isNotBlank() && it.type != MediaType.LIVE }
+            ?: catalog.firstOrNull { it.imageUrl.isNotBlank() }
+            ?: catalog.firstOrNull()
+    }
+    var heroItem by remember(defaultFeatured) { mutableStateOf(defaultFeatured) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
-        if (featured != null) {
-            Surface(
-                color = Color(0xFF161D2B),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, Color(0x22FFFFFF)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${featured.type.label.uppercase()} • ${featured.country} •${featured.genre}",
-                            color = Color(0xFF60A5FA),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = featured.title,
-                            color = Color.White,
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Button(
-                        onClick = { onPlay(featured) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black
-                        ),
-                        shape = RoundedCornerShape(50)
-                    ) {
-                        Text("Spela nu", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+        if (heroItem != null) {
+            AppleTvHeroBanner(
+                item = heroItem!!,
+                onPlay = { onPlay(heroItem!!) }
+            )
         }
 
-        if (live.isNotEmpty()) {
-            MediaRow(title = "Live TV", items = live, hideAdult = hideAdult, onPlay = onPlay)
-        }
         if (movies.isNotEmpty()) {
-            MediaRow(title = "Filmer", items = movies, hideAdult = hideAdult, onPlay = onPlay)
+            MediaRow(
+                title = "Filmer",
+                items = movies,
+                isPosterStyle = true,
+                onFocusItem = { heroItem = it },
+                onPlay = onPlay
+            )
         }
         if (series.isNotEmpty()) {
-            MediaRow(title = "Serier", items = series, hideAdult = hideAdult, onPlay = onPlay)
+            MediaRow(
+                title = "Serier",
+                items = series,
+                isPosterStyle = true,
+                onFocusItem = { heroItem = it },
+                onPlay = onPlay
+            )
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        if (live.isNotEmpty()) {
+            MediaRow(
+                title = "Live TV",
+                items = live,
+                isPosterStyle = false,
+                onFocusItem = { heroItem = it },
+                onPlay = onPlay
+            )
+        }
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
 @Composable
-fun MediaRow(
-    title: String,
-    items: List<MediaEntry>,
-    hideAdult: Boolean,
-    onPlay: (MediaEntry) -> Unit
-) {
-    Column {
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(items) { item ->
-                MediaCard(
-                    item = item,
-                    locked = item.isAdult && hideAdult,
-                    modifier = Modifier.width(230.dp),
-                    onClick = { onPlay(item) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun CatalogView(
-    items: List<MediaEntry>,
-    hideAdult: Boolean,
-    emptyLabel: String,
-    onPlay: (MediaEntry) -> Unit
-) {
-    var selectedCountry by remember(items) { mutableStateOf("Alla länder") }
-    var selectedGenre by remember(items) { mutableStateOf("Alla genrer") }
-
-    val countries = remember(items) {
-        listOf("Alla länder") + items.map { it.country }.distinct().sorted()
-    }
-    val countryFiltered = remember(items, selectedCountry) {
-        if (selectedCountry == "Alla länder") items else items.filter { it.country == selectedCountry }
-    }
-    val genres = remember(countryFiltered) {
-        listOf("Alla genrer") + countryFiltered.map { it.genre }.distinct().sorted()
-    }
-    val finalItems = remember(countryFiltered, selectedGenre) {
-        if (selectedGenre == "Alla genrer") countryFiltered else countryFiltered.filter { it.genre == selectedGenre }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(countries) { country ->
-                NavPill(
-                    label = country,
-                    selected = selectedCountry == country,
-                    onClick = {
-                        selectedCountry = country
-                        selectedGenre = "Alla genrer"
-                    }
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(genres) { genre ->
-                NavPill(
-                    label = genre,
-                    selected = selectedGenre == genre,
-                    onClick = { selectedGenre = genre }
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (finalItems.isEmpty()) {
-            Text(text = emptyLabel, color = Color(0xFF9CA3AF), fontSize = 16.sp)
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 220.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(finalItems) { item ->
-                    MediaCard(
-                        item = item,
-                        locked = item.isAdult && hideAdult,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onPlay(item) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MediaCard(
+fun AppleTvHeroBanner(
     item: MediaEntry,
-    locked: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onPlay: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(targetValue = if (focused) 1.015f else 1f, label = "heroScale")
 
-    Surface(
-        color = if (focused) Color(0xFF232F46) else Color(0xFF151B28),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(
-            width = if (focused) 2.5.dp else 1.dp,
-            color = if (focused) Color.White else Color(0x1FFFFFFF)
-        ),
-        modifier = modifier
-            .height(112.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(290.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .shadow(elevation = if (focused) 24.dp else 10.dp, shape = RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .border(
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) Color.White else Color(0x28FFFFFF),
+                shape = RoundedCornerShape(24.dp)
+            )
             .onFocusChanged { focused = it.isFocused }
             .focusable()
-            .clickable { onClick() }
+            .clickable { onPlay() }
     ) {
-        Column(
+        AsyncCoverImage(
+            url = item.imageUrl,
+            title = item.title,
+            contentScale = ContentScale.Crop,
+            maxDimension = 960,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Biotonad mörk vinjett för hög kontrast (Apple TV+-stil)
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(Color(0xE605070C), Color(0x9905070C), Color(0x2205070C))
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color(0x5505070C), Color(0xE605070C))
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(horizontal = 32.dp, vertical = 26.dp)
+                .fillMaxWidth(0.72f),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            Surface(
+                color = Color(0x38FFFFFF),
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, Color(0x40FFFFFF))
+            ) {
+                Text(
+                    text = "${item.type.label.uppercase()}  •  ${item.country}  •${item.genre}",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                )
+            }
+
             Text(
-                text = if (locked) "18+ • Skyddat innehåll" else "${item.country} •${item.genre}",
-                color = if (locked) Color(0xFFFBBF24) else if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = if (locked) "🔒 18+ Låst kanal" else item.title,
+                text = item.title,
                 color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-        }
-    }
-}
 
-@Composable
-fun SettingsView(
-    localIp: String,
-    initialMode: String,
-    initialFormat: String,
-    initialM3u: String,
-    initialServer: String,
-    initialUser: String,
-    initialPass: String,
-    initialAdultLock: Boolean,
-    initialAdultPin: String,
-    onBack: () -> Unit,
-    onSave: (String, String, String, String, String, String, Boolean, String) -> Unit
-) {
-    var selectedMode by remember { mutableStateOf(initialMode) }
-    var selectedFormat by remember { mutableStateOf(initialFormat) }
-    var m3u by remember { mutableStateOf(initialM3u) }
-    var server by remember { mutableStateOf(initialServer) }
-    var user by remember { mutableStateOf(initialUser) }
-    var pass by remember { mutableStateOf(initialPass) }
-    var adultLock by remember { mutableStateOf(initialAdultLock) }
-    var adultPin by remember { mutableStateOf(initialAdultPin) }
-    var pinWarning by remember { mutableStateOf<String?>(null) }
+            Spacer(modifier = Modifier.height(4.dp))
 
-    Surface(
-        color = Color(0xFF151B28),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, Color(0x22FFFFFF)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                NavPill(label = "← Tillbaka", selected = false, onClick = onBack)
-                Text(
-                    text = "Inställningar",
+                Surface(
                     color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, Color(0xFF38BDF8)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Snabbinmatning från dator eller mobil (samma Wi-Fi):",
-                        color = Color(0xFF93C5FD),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "http://$localIp:8099/add",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-            }
-
-            Text(
-                text = "IPTV-källa",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NavPill(
-                    label = "M3U-länk",
-                    selected = selectedMode == "M3U",
-                    onClick = { selectedMode = "M3U" }
-                )
-                NavPill(
-                    label = "Xtream Codes",
-                    selected = selectedMode == "XTREAM",
-                    onClick = { selectedMode = "XTREAM" }
-                )
-            }
-
-            if (selectedMode == "M3U") {
-                OutlinedTextField(
-                    value = m3u,
-                    onValueChange = { m3u = it },
-                    label = { Text("M3U-spellista URL (http://...)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else {
-                OutlinedTextField(
-                    value = server,
-                    onValueChange = { server = it },
-                    label = { Text("Server-URL (t.ex. http://server.com:8080)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = user,
-                        onValueChange = { user = it },
-                        label = { Text("Användarnamn") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = pass,
-                        onValueChange = { pass = it },
-                        label = { Text("Lösenord") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Strömformat för Live TV",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NavPill(
-                    label = "Auto (Smart växling)",
-                    selected = selectedFormat == "AUTO",
-                    onClick = { selectedFormat = "AUTO" }
-                )
-                NavPill(
-                    label = "Alltid HLS (.m3u8)",
-                    selected = selectedFormat == "HLS",
-                    onClick = { selectedFormat = "HLS" }
-                )
-                NavPill(
-                    label = "Alltid MPEG-TS (.ts)",
-                    selected = selectedFormat == "MPEG-TS",
-                    onClick = { selectedFormat = "MPEG-TS" }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Föräldrakontroll (18+ / Vuxenkanaler)",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NavPill(
-                    label = "Av (Olåst)",
-                    selected = !adultLock,
-                    onClick = {
-                        adultLock = false
-                        pinWarning = null
-                    }
-                )
-                NavPill(
-                    label = "På (Kräv lösenord)",
-                    selected = adultLock,
-                    onClick = { adultLock = true }
-                )
-            }
-
-            if (adultLock) {
-                OutlinedTextField(
-                    value = adultPin,
-                    onValueChange = {
-                        adultPin = it
-                        pinWarning = null
-                    },
-                    label = { Text("Lösenord / PIN-kod för 18+ (t.ex. 1234)") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (pinWarning != null) {
-                    Text(
-                        text = pinWarning!!,
-                        color = Color(0xFFFBBF24),
-                        fontSize = 13.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            Button(
-                onClick = {
-                    if (adultLock && adultPin.trim().isEmpty()) {
-                        pinWarning = "Ange ett lösenord/PIN-kod innan du sparar, eller välj Av."
-                    } else {
-                        onSave(
-                            selectedMode,
-                            selectedFormat,
-                            m3u.trim(),
-                            server.trim(),
-                            user.trim(),
-                            pass.trim(),
-                            adultLock,
-                            adultPin.trim()
-                        )
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black
-                ),
-                shape = RoundedCornerShape(50)
-            ) {
-                Text("Spara & synka kanaler", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@kotlin.OptIn(UnstableApi::class)
-@Composable
-fun PlayerScreen(
-    item: MediaEntry,
-    streamFormatMode: String,
-    onBack: () -> Unit
-) {
-    val context = LocalContext.current
-    var activeUrl by remember(item.url) { mutableStateOf(item.url) }
-    var preferSoftware by remember(item.url) { mutableStateOf(false) }
-    var triedFormatSwap by remember(item.url) { mutableStateOf(false) }
-    var autoDecoderFallbackTriggered by remember(item.url) { mutableStateOf(false) }
-    var resumePositionMs by remember(item.url) { mutableStateOf(0L) }
-    var resolutionText by remember(item.url) { mutableStateOf("Laddar ström...") }
-    var audioTracks by remember(
+                    shape = RoundedCornerShape(50)
+                ) {

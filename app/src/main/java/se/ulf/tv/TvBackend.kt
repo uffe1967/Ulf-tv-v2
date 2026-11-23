@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.net.*
+import kotlin.math.min
 
 enum class MediaType(val label: String) { LIVE("Live TV"), MOVIE("Filmer"), SERIES("Serier") }
 enum class NavSection(val label: String) { HOME("Hem"), LIVE("Live TV"), MOVIES("Filmer"), SERIES("Serier"), SETTINGS("Inställningar") }
@@ -25,7 +26,7 @@ data class MediaEntry(
 data class TrackOption(val label: String, val groupIndex: Int, val trackIndex: Int)
 
 object CoverImageCache {
-    private val cache = LruCache<String, ImageBitmap>(80)
+    private val cache = LruCache<String, ImageBitmap>(40)
     fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
     fun put(key: String, bmp: ImageBitmap) = synchronized(cache) { cache.put(key, bmp) }
 }
@@ -33,19 +34,19 @@ object CoverImageCache {
 fun loadScaledBitmap(urlString: String, maxDim: Int): ImageBitmap? {
     return try {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 5000; readTimeout = 7000; instanceFollowRedirects = true
+            connectTimeout = 4000; readTimeout = 5000; instanceFollowRedirects = true
             setRequestProperty("User-Agent", "ObsidianTV/2.0")
         }
         if (conn.responseCode !in 200..299) { conn.disconnect(); return null }
         val bytes = conn.inputStream.use { input ->
             val out = ByteArrayOutputStream()
-            val buf = ByteArray(8192)
+            val buf = ByteArray(4096)
             var total = 0
             while (true) {
                 val read = input.read(buf)
                 if (read == -1) break
                 total += read
-                if (total > 5 * 1024 * 1024) return null
+                if (total > 2 * 1024 * 1024) return null
                 out.write(buf, 0, read)
             }
             out.toByteArray()
@@ -215,7 +216,7 @@ fun detectAdultContent(vararg texts: String): Boolean {
 
 fun fetchText(urlString: String): String {
     val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15000; readTimeout = 20000
+        connectTimeout = 10000; readTimeout = 12000
         setRequestProperty("User-Agent", "ObsidianTV/2.0")
     }
     return conn.inputStream.bufferedReader().use { it.readText() }
@@ -225,9 +226,11 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
     val base = server.trimEnd('/')
     val extLive = if (format == "MPEG-TS") "ts" else "m3u8"
     val result = mutableListOf<MediaEntry>()
+    val maxPerType = 300
     try {
         val liveJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_live_streams"))
-        for (i in 0 until liveJson.length()) {
+        val count = min(liveJson.length(), maxPerType)
+        for (i in 0 until count) {
             val o = liveJson.getJSONObject(i)
             val id = o.optString("stream_id")
             val name = o.optString("name", "Kanal")
@@ -237,7 +240,8 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
     } catch (_: Exception) { }
     try {
         val vodJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams"))
-        for (i in 0 until vodJson.length()) {
+        val count = min(vodJson.length(), maxPerType)
+        for (i in 0 until count) {
             val o = vodJson.getJSONObject(i)
             val id = o.optString("stream_id")
             val name = o.optString("name", "Film")
@@ -256,6 +260,7 @@ fun parseM3u(content: String, format: String): List<MediaEntry> {
     val gReg = Regex("""group-title="([^"]+)"""")
     val lReg = Regex("""tvg-logo="([^"]+)"""")
     for (raw in content.lines()) {
+        if (result.size >= 900) break
         val line = raw.trim()
         if (line.isEmpty()) continue
         if (line.startsWith("#EXTINF", true)) {

@@ -73,8 +73,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URL
+import java.net.URLDecoder
 
 enum class MediaType(val label: String) {
     LIVE("Live TV"),
@@ -122,6 +129,7 @@ fun UlfTvApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("ulf_tv_v2", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
+    val localIp = remember { getLocalIpAddress() }
 
     var mode by remember { mutableStateOf(prefs.getString("mode", "M3U") ?: "M3U") }
     var streamFormat by remember { mutableStateOf(prefs.getString("stream_format", "AUTO") ?: "AUTO") }
@@ -139,7 +147,7 @@ fun UlfTvApp() {
     var catalog by remember { mutableStateOf(demoCatalog()) }
     var currentSection by remember { mutableStateOf(NavSection.HOME) }
     var playingItem by remember { mutableStateOf<MediaEntry?>(null) }
-    var statusText by remember { mutableStateOf("Demoläge • Lägg till M3U eller Xtream under Inställningar") }
+    var statusText by remember { mutableStateOf("Webbsida: http://$localIp:8099/add") }
 
     val isAdultRestricted = adultLockEnabled && adultPin.isNotBlank() && !adultUnlocked
     val hasAdultItems = remember(catalog) { catalog.any { it.isAdult } }
@@ -187,6 +195,72 @@ fun UlfTvApp() {
             } catch (e: Exception) {
                 statusText = "Kunde inte ladda: ${e.message ?: "Kontrollera adressen"}"
             }
+        }
+    }
+
+    // Inbyggd webbserver på port 8099 (/add) så du kan klistra in länkar från dator/mobil
+    DisposableEffect(Unit) {
+        var serverSocket: ServerSocket? = null
+        val job = scope.launch(Dispatchers.IO) {
+            try {
+                val socket = ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(8099))
+                }
+                serverSocket = socket
+                while (true) {
+                    val client = socket.accept()
+                    launch(Dispatchers.IO) {
+                        handleWebClient(
+                            socket = client,
+                            currentMode = mode,
+                            currentFormat = streamFormat,
+                            currentM3u = m3uUrl,
+                            currentServer = xtServer,
+                            currentUser = xtUser,
+                            currentPass = xtPass,
+                            currentAdultLock = adultLockEnabled,
+                            currentAdultPin = adultPin,
+                            onApplyConfig = { newMode, newFormat, newM3u, newServer, newUser, newPass, newAdultLock, newAdultPin ->
+                                withContext(Dispatchers.Main) {
+                                    mode = newMode
+                                    streamFormat = newFormat
+                                    m3uUrl = newM3u
+                                    xtServer = newServer
+                                    xtUser = newUser
+                                    xtPass = newPass
+                                    adultLockEnabled = newAdultLock
+                                    adultPin = newAdultPin
+                                    if (newAdultLock) {
+                                        adultUnlocked = false
+                                    }
+                                    prefs.edit()
+                                        .putString("mode", newMode)
+                                        .putString("stream_format", newFormat)
+                                        .putString("m3u_url", newM3u)
+                                        .putString("xt_server", newServer)
+                                        .putString("xt_user", newUser)
+                                        .putString("xt_pass", newPass)
+                                        .putBoolean("adult_lock_enabled", newAdultLock)
+                                        .putString("adult_pin", newAdultPin)
+                                        .apply()
+                                    currentSection = NavSection.HOME
+                                    syncCatalog(newMode, newFormat, newM3u, newServer, newUser, newPass)
+                                }
+                            }
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // Stängs ner när appen avslutas
+            }
+        }
+        onDispose {
+            try {
+                serverSocket?.close()
+            } catch (_: Exception) {
+            }
+            job.cancel()
         }
     }
 
@@ -300,6 +374,7 @@ fun UlfTvApp() {
                     onPlay = ::handleSelectMedia
                 )
                 NavSection.SETTINGS -> SettingsView(
+                    localIp = localIp,
                     initialMode = mode,
                     initialFormat = streamFormat,
                     initialM3u = m3uUrl,
@@ -717,6 +792,7 @@ fun MediaCard(
 
 @Composable
 fun SettingsView(
+    localIp: String,
     initialMode: String,
     initialFormat: String,
     initialM3u: String,
@@ -749,6 +825,29 @@ fun SettingsView(
             modifier = Modifier.padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Snabbinmatning från dator eller mobil (samma Wi-Fi):",
+                        color = Color(0xFF93C5FD),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "http://$localIp:8099/add",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
             Text(
                 text = "IPTV-källa",
                 color = Color.White,
@@ -1136,6 +1235,248 @@ fun PlayerScreen(
     }
 }
 
+fun getLocalIpAddress(): String {
+    try {
+        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return "192.168.11.22"
+        for (intf in interfaces) {
+            val addrs = intf.inetAddresses
+            for (addr in addrs) {
+                if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                    val ip = addr.hostAddress
+                    if (!ip.isNullOrBlank()) return ip
+                }
+            }
+        }
+    } catch (_: Exception) {
+    }
+    return "192.168.11.22"
+}
+
+suspend fun handleWebClient(
+    socket: Socket,
+    currentMode: String,
+    currentFormat: String,
+    currentM3u: String,
+    currentServer: String,
+    currentUser: String,
+    currentPass: String,
+    currentAdultLock: Boolean,
+    currentAdultPin: String,
+    onApplyConfig: suspend (String, String, String, String, String, String, Boolean, String) -> Unit
+) {
+    try {
+        socket.soTimeout = 10000
+        val input = socket.getInputStream()
+        val headerBytes = ByteArrayOutputStream()
+        var prev1 = 0
+        var prev2 = 0
+        var prev3 = 0
+        while (true) {
+            val b = input.read()
+            if (b == -1) break
+            headerBytes.write(b)
+            if (prev1 == '\r'.code && prev2 == '\n'.code && prev3 == '\r'.code && b == '\n'.code) {
+                break
+            }
+            prev1 = prev2
+            prev2 = prev3
+            prev3 = b
+        }
+        val headerText = headerBytes.toString("UTF-8")
+        if (headerText.isBlank()) {
+            socket.close()
+            return
+        }
+
+        val firstLine = headerText.lines().firstOrNull().orEmpty()
+        val isPost = firstLine.startsWith("POST", ignoreCase = true)
+        val contentLength = headerText.lines()
+            .firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
+            ?.substringAfter(":")
+            ?.trim()
+            ?.toIntOrNull() ?: 0
+
+        var savedBanner = false
+        var formMode = currentMode
+        var formFormat = currentFormat
+        var formM3u = currentM3u
+        var formServer = currentServer
+        var formUser = currentUser
+        var formPass = currentPass
+        var formAdultLock = currentAdultLock
+        var formAdultPin = currentAdultPin
+
+        if (isPost && contentLength > 0) {
+            val bodyBytes = ByteArray(contentLength)
+            var totalRead = 0
+            while (totalRead < contentLength) {
+                val read = input.read(bodyBytes, totalRead, contentLength - totalRead)
+                if (read == -1) break
+                totalRead += read
+            }
+            val bodyText = String(bodyBytes, 0, totalRead, Charsets.UTF_8)
+            val params = parseFormBody(bodyText)
+
+            formMode = params["mode"]?.ifBlank { "M3U" } ?: "M3U"
+            formFormat = params["format"]?.ifBlank { "AUTO" } ?: "AUTO"
+            formM3u = params["m3u"]?.trim().orEmpty()
+            formServer = params["server"]?.trim().orEmpty()
+            formUser = params["user"]?.trim().orEmpty()
+            formPass = params["pass"]?.trim().orEmpty()
+            formAdultPin = params["adult_pin"]?.trim().orEmpty()
+            formAdultLock = (params["adult_lock"] == "1") && formAdultPin.isNotEmpty()
+
+            onApplyConfig(
+                formMode,
+                formFormat,
+                formM3u,
+                formServer,
+                formUser,
+                formPass,
+                formAdultLock,
+                formAdultPin
+            )
+            savedBanner = true
+        }
+
+        val html = buildWebConfigHtml(
+            saved = savedBanner,
+            mode = formMode,
+            format = formFormat,
+            m3u = formM3u,
+            server = formServer,
+            user = formUser,
+            pass = formPass,
+            adultLock = formAdultLock,
+            adultPin = formAdultPin
+        )
+        val htmlBytes = html.toByteArray(Charsets.UTF_8)
+        val responseHeader = "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: text/html; charset=UTF-8\r\n" +
+            "Content-Length: ${htmlBytes.size}\r\n" +
+            "Connection: close\r\n\r\n"
+
+        val out = socket.getOutputStream()
+        out.write(responseHeader.toByteArray(Charsets.UTF_8))
+        out.write(htmlBytes)
+        out.flush()
+    } catch (_: Exception) {
+    } finally {
+        try {
+            socket.close()
+        } catch (_: Exception) {
+        }
+    }
+}
+
+fun parseFormBody(body: String): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    if (body.isBlank()) return map
+    for (pair in body.split("&")) {
+        val idx = pair.indexOf('=')
+        if (idx > 0) {
+            val key = URLDecoder.decode(pair.substring(0, idx), "UTF-8")
+            val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+            map[key] = value
+        }
+    }
+    return map
+}
+
+fun escapeHtml(text: String): String {
+    return text
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+}
+
+fun buildWebConfigHtml(
+    saved: Boolean,
+    mode: String,
+    format: String,
+    m3u: String,
+    server: String,
+    user: String,
+    pass: String,
+    adultLock: Boolean,
+    adultPin: String
+): String {
+    val banner = if (saved) {
+        """<div class="ok">Sparat! Kanalerna synkas nu direkt på din TV.</div>"""
+    } else {
+        ""
+    }
+    return """
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ulf TV – Lägg till spellista</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0d14; color: #f8fafc; margin: 0; padding: 24px; }
+  .box { max-width: 560px; margin: 0 auto; background: #151b28; border: 1px solid #283248; border-radius: 18px; padding: 24px; }
+  h1 { margin-top: 0; font-size: 22px; }
+  label { display: block; margin-top: 14px; margin-bottom: 6px; font-size: 13px; color: #94a3b8; font-weight: 600; }
+  input, select { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 15px; }
+  button { margin-top: 22px; width: 100%; padding: 14px; border: none; border-radius: 999px; background: #fff; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; }
+  .ok { background: #14532d; border: 1px solid #22c55e; color: #dcfce7; padding: 12px 16px; border-radius: 12px; margin-bottom: 16px; font-weight: 600; }
+  .section { border-top: 1px solid #263044; margin-top: 18px; padding-top: 10px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Ulf TV – Snabbinställning</h1>
+  $banner
+  <form method="POST" action="/add">
+    <label>Välj inloggningstyp</label>
+    <select name="mode">
+      <option value="M3U" ${if (mode == "M3U") "selected" else ""}>M3U-länk</option>
+      <option value="XTREAM" ${if (mode == "XTREAM") "selected" else ""}>Xtream Codes (Server + Användare + Lösenord)</option>
+    </select>
+
+    <div class="section">
+      <label>Alternativ 1: M3U-spellista URL</label>
+      <input type="text" name="m3u" placeholder="http://..." value="${escapeHtml(m3u)}">
+    </div>
+
+    <div class="section">
+      <label>Alternativ 2: Xtream Server-URL</label>
+      <input type="text" name="server" placeholder="http://server.com:8080" value="${escapeHtml(server)}">
+      <label>Xtream Användarnamn</label>
+      <input type="text" name="user" value="${escapeHtml(user)}">
+      <label>Xtream Lösenord</label>
+      <input type="text" name="pass" value="${escapeHtml(pass)}">
+    </div>
+
+    <div class="section">
+      <label>Strömformat (Live TV)</label>
+      <select name="format">
+        <option value="AUTO" ${if (format == "AUTO") "selected" else ""}>Auto (Smart växling HLS / MPEG-TS)</option>
+        <option value="HLS" ${if (format == "HLS") "selected" else ""}>Alltid HLS (.m3u8)</option>
+        <option value="MPEG-TS" ${if (format == "MPEG-TS") "selected" else ""}>Alltid MPEG-TS (.ts)</option>
+      </select>
+    </div>
+
+    <div class="section">
+      <label>Föräldrakontroll (18+ / Vuxenkanaler)</label>
+      <select name="adult_lock">
+        <option value="0" ${if (!adultLock) "selected" else ""}>Av (Olåst)</option>
+        <option value="1" ${if (adultLock) "selected" else ""}>På (Kräv PIN-kod)</option>
+      </select>
+      <label>PIN-kod för 18+</label>
+      <input type="text" name="adult_pin" placeholder="t.ex. 1234" value="${escapeHtml(adultPin)}">
+    </div>
+
+    <button type="submit">Spara &amp; skicka till TV</button>
+  </form>
+</div>
+</body>
+</html>
+""".trimIndent()
+}
+
 fun detectStreamTag(url: String): String? {
     val lower = url.lowercase()
     return when {
@@ -1236,7 +1577,8 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
                 )
             )
         }
-    } catch (_: Exception) { }
+    } catch (_: Exception) {
+    }
 
     try {
         val vodJson = JSONArray(fetchText("$base/player_api.php?username=$user&password=$pass&action=get_vod_streams"))
@@ -1259,7 +1601,8 @@ fun fetchXtreamCatalog(server: String, user: String, pass: String, format: Strin
                 )
             )
         }
-    } catch (_: Exception) { }
+    } catch (_: Exception) {
+    }
 
     return result
 }

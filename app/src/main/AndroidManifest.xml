@@ -1,34 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
 
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Mörk 16:9-bakgrund -->
+    <path
+        android:fillColor="#0B0F1A"
+        android:pathData="M0,0h320v180h-320z" />
 
-    <uses-feature
-        android:name="android.software.leanback"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.touchscreen"
-        android:required="false" />
+    <!-- Subtil diagonal skugga -->
+    <path
+        android:fillColor="#131B2E"
+        android:pathData="M0,0L220,0L110,180L0,180Z" />
 
-    <application
-        android:allowBackup="true"
-        android:icon="@android:drawable/sym_def_app_icon"
-        android:banner="@android:drawable/sym_def_app_icon"
-        android:label="Obsidian"
-        android:largeHeap="true"
-        android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+    <!-- Tunn ljusblå linje längst ner -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M0,174h320v6h-320z" />
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="landscape">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
+    <!-- Yttre cirkel i mitten -->
+    <path
+        android:fillColor="#1E293B"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="3"
+        android:pathData="M160,46a44,44 0 1,0 0,88a44,44 0 1,0 0,-88z" />
+
+    <!-- Vit Play-triangel -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M148,68L182,90L148,112Z" />
+</vector>

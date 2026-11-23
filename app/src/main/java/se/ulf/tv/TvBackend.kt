@@ -563,4 +563,89 @@ fun demoCatalog(): List<MediaEntry> = listOf(
     MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
     MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
     MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
-)
+)fun openConnectionFollowingRedirects(urlString: String): HttpURLConnection {
+    var currentUrl = urlString.trim()
+    var redirects = 0
+    while (redirects < 6) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 45000
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "VLC/3.0.18 LibVLC/3.0.18")
+            setRequestProperty("Accept", "*/*")
+        }
+        val code = conn.responseCode
+        if (code in listOf(301, 302, 303, 307, 308)) {
+            val location = conn.getHeaderField("Location")
+            conn.disconnect()
+            if (location.isNullOrBlank()) throw IllegalStateException("Tom omdirigering ($code)")
+            currentUrl = URL(URL(currentUrl), location).toString()
+            redirects++
+            continue
+        }
+        if (code !in 200..299) {
+            conn.disconnect()
+            throw IllegalStateException("HTTP $code")
+        }
+        return conn
+    }
+    throw IllegalStateException("För många omdirigeringar")
+}
+
+fun parseM3uFromUrl(urlString: String, format: String): List<MediaEntry> {
+    val conn = openConnectionFollowingRedirects(urlString)
+    return try {
+        val result = ArrayList<MediaEntry>(8192)
+        var name = "Okänd"
+        var group = "Övrigt"
+        var logo = ""
+        val maxTotal = 150_000
+
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            var rawLine = reader.readLine()
+            while (rawLine != null && result.size < maxTotal) {
+                val line = rawLine.removePrefix("\uFEFF").trim()
+                if (line.isNotEmpty()) {
+                    if (line.startsWith("#EXTINF", true)) {
+                        val gVal = extractQuotedAttr(line, "group-title")
+                        group = if (gVal.isNotBlank()) gVal else "Övrigt"
+                        logo = extractQuotedAttr(line, "tvg-logo")
+                        val comma = line.lastIndexOf(',')
+                        name = if (comma != -1 && comma + 1 < line.length) {
+                            line.substring(comma + 1).trim().ifBlank { "Okänd" }
+                        } else {
+                            "Okänd"
+                        }
+                    } else if (!line.startsWith("#")) {
+                        if (line.startsWith("http://", true) || line.startsWith("https://", true) || line.startsWith("rtmp://", true)) {
+                            val type = detectMediaType(group, name, line)
+                            val (c, g) = extractCountryAndSubcategory(group, name)
+                            val idx = result.size
+                            result.add(
+                                MediaEntry(
+                                    id = "${idx}_${name.hashCode()}",
+                                    title = name,
+                                    country = c,
+                                    genre = g,
+                                    url = if (type == MediaType.LIVE) applyStreamFormat(line, format) else line,
+                                    type = type,
+                                    isAdult = detectAdultContent(name, group),
+                                    imageUrl = logo,
+                                    is4K = is4KTitle(name, group, g),
+                                    orderIndex = idx
+                                )
+                            )
+                        }
+                        name = "Okänd"
+                        group = "Övrigt"
+                        logo = ""
+                    }
+                }
+                rawLine = reader.readLine()
+            }
+        }
+        result
+    } finally {
+        try { conn.disconnect() } catch (_: Exception) { }
+    }
+}

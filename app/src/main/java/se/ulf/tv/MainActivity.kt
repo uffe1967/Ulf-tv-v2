@@ -238,8 +238,8 @@ fun ObsidianApp() {
                 when (currentSection) {
                     NavSection.HOME -> AppleTvHomeView(visibleCatalog, liveItems, movieItems, seriesItems, ::handleMediaClick)
                     NavSection.LIVE -> LiveTvSplitView(liveItems) { playingItem = it }
-                    NavSection.MOVIES -> CuratedMediaSectionView(movieItems, "filmer", "Inga filmer hittades i spellistan.", ::handleMediaClick)
-                    NavSection.SERIES -> CuratedMediaSectionView(seriesItems, "serier", "Inga serier hittades i spellistan.", ::handleMediaClick)
+                    NavSection.MOVIES -> CuratedMediaSectionView(movieItems, "Filmer", "filmer", "Inga filmer hittades i spellistan.", ::handleMediaClick)
+                    NavSection.SERIES -> CuratedMediaSectionView(seriesItems, "Serier", "serier", "Inga serier hittades i spellistan.", ::handleMediaClick)
                     NavSection.SETTINGS -> SettingsView(
                         localIp, mode, streamFormat, m3uUrl, xtServer, xtUser, xtPass, adultLockEnabled, adultPin, adultUnlocked,
                         onRequestUnlockAdult = { showUnlockDialog = true },
@@ -253,6 +253,191 @@ fun ObsidianApp() {
         if (showUnlockDialog) {
             BackHandler { showUnlockDialog = false }
             PinUnlockOverlay(adultPin, { adultUnlocked = true; showUnlockDialog = false }, { showUnlockDialog = false })
+        }
+    }
+}
+
+private fun normalizeLiveSubcategory(rawGenre: String, rawTitle: String): String {
+    val withoutCountry = rawGenre.replace(Regex("""(?i)^[A-Z]{2,4}\s*[\|\:\-\/]+\s*"""), "").trim()
+    val t = "$withoutCountry $rawTitle".lowercase()
+    return when {
+        t.contains("sport") || t.contains("viaplay") || t.contains("eurosport") || t.contains("fotboll") || t.contains("hockey") || t.contains("golf") || t.contains("ufc") || t.contains("tennis") -> "Sport"
+        t.contains("news") || t.contains("nyheter") || t.contains("cnn") || t.contains("bbc") || t.contains("svt") || t.contains("tv4") -> "Nyheter"
+        t.contains("movie") || t.contains("film") || t.contains("cinema") || t.contains("hbo") -> "Film"
+        t.contains("music") || t.contains("musik") || t.contains("mtv") -> "Musik"
+        t.contains("doc") || t.contains("dokumentär") || t.contains("natgeo") || t.contains("discovery") || t.contains("history") -> "Dokumentär"
+        t.contains("kids") || t.contains("barn") || t.contains("disney") || t.contains("cartoon") || t.contains("nick") -> "Barn"
+        t.contains("entertain") || t.contains("underhåll") || t.contains("comedy") || t.contains("reality") -> "Underhållning"
+        withoutCountry.isNotBlank() -> withoutCountry.take(24)
+        else -> "Övrigt"
+    }
+}
+
+@Composable
+fun LiveTvSplitView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
+    if (items.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Inga Live TV-kanaler hittades.", color = Color(0xFF9CA3AF), fontSize = 16.sp)
+        }
+        return
+    }
+
+    val countries = remember(items) { listOf("Alla länder") + items.map { it.country }.distinct().sorted() }
+    val subCategories = remember(items) {
+        val base = listOf("Sport", "Nyheter", "Film", "Musik", "Dokumentär", "Barn", "Underhållning")
+        val found = items.map { normalizeLiveSubcategory(it.genre, it.title) }
+            .filter { it !in base && it != "Övrigt" }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(8)
+            .map { it.key }
+        listOf("Alla underkategorier") + base + found
+    }
+
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCountry by remember(items) { mutableStateOf("Alla länder") }
+    var selectedSub by remember(items) { mutableStateOf("Alla underkategorier") }
+    var filtered by remember(items) { mutableStateOf(items.take(250)) }
+    var totalMatches by remember(items) { mutableStateOf(items.size) }
+
+    LaunchedEffect(items, searchQuery, selectedCountry, selectedSub) {
+        if (searchQuery.isNotEmpty()) delay(250)
+        val q = searchQuery.trim().lowercase()
+        val result = withContext(Dispatchers.Default) {
+            items.filter { entry ->
+                val okCountry = selectedCountry == "Alla länder" || entry.country == selectedCountry
+                val entrySub = normalizeLiveSubcategory(entry.genre, entry.title)
+                val okSub = selectedSub == "Alla underkategorier" || entrySub.equals(selectedSub, ignoreCase = true)
+                val okSearch = q.isEmpty() ||
+                    entry.title.lowercase().contains(q) ||
+                    entry.country.lowercase().contains(q) ||
+                    entrySub.lowercase().contains(q)
+                okCountry && okSub && okSearch
+            }
+        }
+        totalMatches = result.size
+        filtered = result.take(250)
+    }
+
+    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        // Vänster: Landlista att bläddra i med fjärrkontrollen
+        Surface(
+            color = Color(0xCC111520),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Color(0x22FFFFFF)),
+            modifier = Modifier.weight(0.25f).fillMaxHeight()
+        ) {
+            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                Text("Länder (${countries.size - 1})", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+                LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    items(countries, key = { it }) { country ->
+                        SideListItem(country, country == selectedCountry) { selectedCountry = country }
+                    }
+                }
+            }
+        }
+
+        // Höger: Underkategori-rad + Sökfält + Kanallista
+        Column(modifier = Modifier.weight(0.75f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.weight(1f)) {
+                    items(subCategories, key = { it }) { sub ->
+                        NavPill(sub, selectedSub == sub) { selectedSub = sub }
+                    }
+                }
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Sök kanal...", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.width(210.dp)
+                )
+                if (searchQuery.isNotEmpty() || selectedCountry != "Alla länder" || selectedSub != "Alla underkategorier") {
+                    NavPill("Rensa", false) { searchQuery = ""; selectedCountry = "Alla länder"; selectedSub = "Alla underkategorier" }
+                }
+                Text("$totalMatches", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Surface(color = Color(0xB30E121C), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x1EFFFFFF)), modifier = Modifier.fillMaxSize()) {
+                if (filtered.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Inga kanaler matchar valt land, underkategori eller sökord.", color = Color(0xFF9CA3AF), fontSize = 14.sp)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(filtered, key = { it.id }) { channel -> LiveChannelRowItem(channel) { onPlay(channel) } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CuratedMediaSectionView(
+    items: List<MediaEntry>,
+    headingTitle: String,
+    sectionTypeLabel: String,
+    emptyLabel: String,
+    onPlay: (MediaEntry) -> Unit
+) {
+    if (items.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(emptyLabel, color = Color(0xFF9CA3AF), fontSize = 16.sp)
+        }
+        return
+    }
+
+    var searchQuery by remember { mutableStateOf("") }
+    var filtered by remember(items) { mutableStateOf(items) }
+
+    LaunchedEffect(items, searchQuery) {
+        if (searchQuery.isNotEmpty()) delay(250)
+        val q = searchQuery.trim().lowercase()
+        filtered = if (q.isEmpty()) items else withContext(Dispatchers.Default) {
+            items.filter { it.title.lowercase().contains(q) || it.genre.lowercase().contains(q) || it.country.lowercase().contains(q) }
+        }
+    }
+
+    var activeHero by remember(filtered) { mutableStateOf(filtered.firstOrNull { it.imageUrl.isNotBlank() } ?: filtered.firstOrNull()) }
+    val latestItems = remember(filtered) { filtered.take(14) }
+    val newestItems = remember(filtered) { filtered.takeLast(14).reversed() }
+    val ultraHdItems = remember(filtered) { filtered.filter { it.is4K }.take(14) }
+    val byGenre = remember(filtered) { filtered.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(4) }
+    val byCountry = remember(filtered) { filtered.groupBy { it.country }.entries.sortedByDescending { it.value.size }.take(4) }
+
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+        item(key = "header_search") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(headingTitle, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Sök bland $sectionTypeLabel...", fontSize = 13.sp) },
+                    singleLine = true,
+                    modifier = Modifier.width(340.dp)
+                )
+                if (searchQuery.isNotEmpty()) {
+                    NavPill("Rensa", false) { searchQuery = "" }
+                    Text("${filtered.size} träffar", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        if (filtered.isEmpty()) {
+            item(key = "empty") { Text("Inga $sectionTypeLabel matchar \"$searchQuery\".", color = Color(0xFF9CA3AF), fontSize = 15.sp) }
+        } else {
+            if (activeHero != null) item(key = "hero") { HeroShowcaseBanner(activeHero!!) { onPlay(activeHero!!) } }
+            item(key = "latest") { MediaShelfRow("Senaste inlagt", latestItems, true, { activeHero = it }, onPlay) }
+            item(key = "newest") { MediaShelfRow("Nya $sectionTypeLabel", newestItems, true, { activeHero = it }, onPlay) }
+            if (ultraHdItems.isNotEmpty()) item(key = "4k") { MediaShelfRow("4K Ultra HD", ultraHdItems, true, { activeHero = it }, onPlay) }
+            byGenre.forEach { (gName, list) -> item(key = "g_$gName") { MediaShelfRow("Genre • $gName", list.take(14), true, { activeHero = it }, onPlay) } }
+            byCountry.forEach { (cName, list) -> item(key = "c_$cName") { MediaShelfRow("Land • $cName", list.take(14), true, { activeHero = it }, onPlay) } }
         }
     }
 }
@@ -388,95 +573,6 @@ fun AppleTvHomeView(
 }
 
 @Composable
-fun LiveTvSplitView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
-    if (items.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Inga Live TV-kanaler hittades.", color = Color(0xFF9CA3AF), fontSize = 16.sp)
-        }
-        return
-    }
-
-    val defaultSubs = listOf("Alla", "Sport", "Nyheter", "Film", "Musik", "Dokumentär", "Barn")
-    val countries = remember(items) { listOf("Alla länder") + items.map { it.country }.distinct().sorted() }
-    val subcategories = remember(items) { (defaultSubs + items.map { it.genre }.distinct().sorted()).distinct().take(18) }
-
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedCountry by remember(items) { mutableStateOf("Alla länder") }
-    var selectedSubcategory by remember(items) { mutableStateOf("Alla") }
-    var filtered by remember(items) { mutableStateOf(items.take(250)) }
-    var totalMatches by remember(items) { mutableStateOf(items.size) }
-
-    LaunchedEffect(items, searchQuery, selectedCountry, selectedSubcategory) {
-        if (searchQuery.isNotEmpty()) delay(250)
-        val q = searchQuery.trim().lowercase()
-        val result = withContext(Dispatchers.Default) {
-            items.filter { entry ->
-                val okCountry = selectedCountry == "Alla länder" || entry.country == selectedCountry
-                val okSub = selectedSubcategory == "Alla" ||
-                    entry.genre.equals(selectedSubcategory, ignoreCase = true) ||
-                    entry.title.contains(selectedSubcategory, ignoreCase = true)
-                val okSearch = q.isEmpty() ||
-                    entry.title.lowercase().contains(q) ||
-                    entry.country.lowercase().contains(q) ||
-                    entry.genre.lowercase().contains(q)
-                okCountry && okSub && okSearch
-            }
-        }
-        totalMatches = result.size
-        filtered = result.take(250)
-    }
-
-    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-        // Vänsterpanel: Bläddringsbar landlista (D-pad-vänlig)
-        Surface(color = Color(0xCC111520), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x22FFFFFF)), modifier = Modifier.weight(0.26f).fillMaxHeight()) {
-            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-                Text("Länder (${countries.size - 1})", color = Color(0xFF93C5FD), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
-                LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(countries, key = { it }) { country ->
-                        SideListItem(country, country == selectedCountry) { selectedCountry = country }
-                    }
-                }
-            }
-        }
-
-        // Högerpanel: Sök + Underkategorier + Kanallista
-        Column(modifier = Modifier.weight(0.74f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Sök kanal...", fontSize = 13.sp) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                if (searchQuery.isNotEmpty() || selectedCountry != "Alla länder" || selectedSubcategory != "Alla") {
-                    NavPill("Rensa", false) { searchQuery = ""; selectedCountry = "Alla länder"; selectedSubcategory = "Alla" }
-                }
-                Text("$totalMatches kanaler", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
-
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(subcategories, key = { it }) { sub ->
-                    NavPill(sub, selectedSubcategory == sub) { selectedSubcategory = sub }
-                }
-            }
-
-            Surface(color = Color(0xB30E121C), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0x1EFFFFFF)), modifier = Modifier.fillMaxSize()) {
-                if (filtered.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Inga kanaler matchar.", color = Color(0xFF9CA3AF), fontSize = 15.sp)
-                    }
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(filtered, key = { it.id }) { channel -> LiveChannelRowItem(channel) { onPlay(channel) } }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun SideListItem(label: String, selected: Boolean, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Box(
@@ -518,60 +614,10 @@ fun LiveChannelRowItem(item: MediaEntry, onClick: () -> Unit) {
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${item.country} • ${normalizeLiveSubcategory(item.genre, item.title)}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Surface(color = if (item.is4K) Color(0xFFE50914) else Color(0xCCDC2626), shape = RoundedCornerShape(6.dp)) {
             Text(if (item.is4K) "4K" else "LIVE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
-        }
-    }
-}
-
-@Composable
-fun CuratedMediaSectionView(items: List<MediaEntry>, sectionTypeLabel: String, emptyLabel: String, onPlay: (MediaEntry) -> Unit) {
-    if (items.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(emptyLabel, color = Color(0xFF9CA3AF), fontSize = 16.sp)
-        }
-        return
-    }
-
-    var searchQuery by remember { mutableStateOf("") }
-    var filtered by remember(items) { mutableStateOf(items) }
-
-    LaunchedEffect(items, searchQuery) {
-        if (searchQuery.isNotEmpty()) delay(300)
-        val q = searchQuery.trim().lowercase()
-        filtered = if (q.isEmpty()) items else withContext(Dispatchers.Default) {
-            items.filter { it.title.lowercase().contains(q) || it.genre.lowercase().contains(q) || it.country.lowercase().contains(q) }
-        }
-    }
-
-    var activeHero by remember(filtered) { mutableStateOf(filtered.firstOrNull { it.imageUrl.isNotBlank() } ?: filtered.firstOrNull()) }
-    val latestItems = remember(filtered) { filtered.take(14) }
-    val newestItems = remember(filtered) { filtered.takeLast(14).reversed() }
-    val ultraHdItems = remember(filtered) { filtered.filter { it.is4K }.take(14) }
-    val byGenre = remember(filtered) { filtered.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(4) }
-    val byCountry = remember(filtered) { filtered.groupBy { it.country }.entries.sortedByDescending { it.value.size }.take(4) }
-
-    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-        item(key = "search") {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, placeholder = { Text("Sök bland $sectionTypeLabel...", fontSize = 13.sp) }, singleLine = true, modifier = Modifier.width(340.dp))
-                if (searchQuery.isNotEmpty()) {
-                    NavPill("Rensa", false) { searchQuery = "" }
-                    Text("${filtered.size} träffar", color = Color(0xFF93C5FD), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-        if (filtered.isEmpty()) {
-            item(key = "empty") { Text("Inga $sectionTypeLabel matchar \"$searchQuery\".", color = Color(0xFF9CA3AF), fontSize = 15.sp) }
-        } else {
-            if (activeHero != null) item(key = "hero") { HeroShowcaseBanner(activeHero!!) { onPlay(activeHero!!) } }
-            item(key = "latest") { MediaShelfRow("Senaste inlagt", latestItems, true, { activeHero = it }, onPlay) }
-            item(key = "newest") { MediaShelfRow("Nya $sectionTypeLabel", newestItems, true, { activeHero = it }, onPlay) }
-            if (ultraHdItems.isNotEmpty()) item(key = "4k") { MediaShelfRow("4K Ultra HD", ultraHdItems, true, { activeHero = it }, onPlay) }
-            byGenre.forEach { (gName, list) -> item(key = "g_$gName") { MediaShelfRow("Genre • $gName", list.take(14), true, { activeHero = it }, onPlay) } }
-            byCountry.forEach { (cName, list) -> item(key = "c_$cName") { MediaShelfRow("Land • $cName", list.take(14), true, { activeHero = it }, onPlay) } }
         }
     }
 }
@@ -692,7 +738,7 @@ fun PlexLiveCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Unit, on
             Text(if (item.is4K) "4K" else "LIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
         }
         Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text("${item.country} • ${item.genre}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${item.country} • ${normalizeLiveSubcategory(item.genre, item.title)}", color = if (focused) Color(0xFF93C5FD) else Color(0xFF9CA3AF), fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(item.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -868,20 +914,20 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
     var triedFormatSwap by remember(item.url) { mutableStateOf(false) }
     var autoDecoderFallback by remember(item.url) { mutableStateOf(false) }
     var resumeMs by remember(item.url) { mutableStateOf(0L) }
-    var resolutionText by remember(item.url) { mutableStateOf("Laddar...") }
+    var resolutionText by remember(item.url) { mutableStateOf("Väntar på bild...") }
     var audioTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
     var subtitleTracks by remember(item.url) { mutableStateOf<List<TrackOption>>(emptyList()) }
     var selectedAudioIdx by remember(item.url) { mutableStateOf(0) }
     var selectedSubIdx by remember(item.url) { mutableStateOf(-1) }
     var currentTracksObj by remember(item.url) { mutableStateOf<Tracks?>(null) }
 
-    var showOverlay by remember { mutableStateOf(true) }
-    var overlayBump by remember { mutableStateOf(0) }
+    var showTopBar by remember { mutableStateOf(true) }
+    var barTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(showOverlay, overlayBump) {
-        if (showOverlay) {
-            delay(4000)
-            showOverlay = false
+    LaunchedEffect(showTopBar, barTick) {
+        if (showTopBar) {
+            delay(3500)
+            showTopBar = false
         }
     }
 
@@ -905,13 +951,17 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(s: VideoSize) {
                 if (s.width > 0 && s.height > 0) {
-                    val q = when { s.height >= 2160 -> "4K"; s.height >= 1080 -> "1080p"; s.height >= 720 -> "720p"; else -> "SD" }
-                    val tag = detectStreamTag(activeUrl)
-                    resolutionText = if (tag != null) "$q • $tag" else q
+                    val q = when {
+                        s.height >= 2160 -> "4K (${s.width}×${s.height})"
+                        s.height >= 1080 -> "1080p (${s.width}×${s.height})"
+                        s.height >= 720 -> "720p (${s.width}×${s.height})"
+                        else -> "SD (${s.width}×${s.height})"
+                    }
+                    resolutionText = q
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
-                showOverlay = true; overlayBump++
+                showTopBar = true; barTick++
                 if (streamFormatMode == "AUTO" && !triedFormatSwap && canSwapFormat(activeUrl)) {
                     val swapped = swapStreamFormat(activeUrl); triedFormatSwap = true
                     resolutionText = "Byter format..."
@@ -938,21 +988,25 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
         onDispose { exoPlayer.removeListener(listener); exoPlayer.release() }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .focusable()
-            .clickable { showOverlay = !showOverlay; overlayBump++ }
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // PlayerView får fullt fokus så OK/Pausa, spola och tidslinje fungerar direkt med fjärrkontrollen
         AndroidView(
-            factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true; controllerShowTimeoutMs = 4000 } },
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = true
+                    controllerShowTimeoutMs = 3500
+                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
+                        showTopBar = vis == android.view.View.VISIBLE
+                    })
+                }
+            },
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize()
         )
 
         AnimatedVisibility(
-            visible = showOverlay,
+            visible = showTopBar,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxWidth().align(Alignment.TopStart)
@@ -960,22 +1014,24 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0x99000000))
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .background(Color(0xA607090F))
+                    .padding(horizontal = 16.dp, vertical = 7.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     NavPill("←", false, onBack)
-                    Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("• $resolutionText", color = Color(0xFF93C5FD), fontSize = 11.sp, maxLines = 1)
+                    Text(item.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Surface(color = Color(0x3338BDF8), shape = RoundedCornerShape(5.dp)) {
+                        Text(resolutionText, color = Color(0xFFBAE6FD), fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp))
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val tag = detectStreamTag(activeUrl)
-                    if (tag != null) NavPill(tag, false) { overlayBump++; activeUrl = swapStreamFormat(activeUrl) }
-                    NavPill(if (preferSoftware) "SW" else "HW", preferSoftware) { overlayBump++; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
-                    NavPill("Ljud: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Std"}", false) {
-                        overlayBump++
+                    if (tag != null) NavPill(tag, false) { barTick++; activeUrl = swapStreamFormat(activeUrl) }
+                    NavPill(if (preferSoftware) "SW" else "HW", preferSoftware) { barTick++; resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L); preferSoftware = !preferSoftware }
+                    NavPill("Språk: ${audioTracks.getOrNull(selectedAudioIdx)?.label ?: "Std"}", false) {
+                        barTick++
                         val t = currentTracksObj ?: return@NavPill
                         if (audioTracks.isEmpty()) return@NavPill
                         val next = (selectedAudioIdx + 1) % audioTracks.size; selectedAudioIdx = next; val c = audioTracks[next]
@@ -983,7 +1039,7 @@ fun PlayerScreen(item: MediaEntry, streamFormatMode: String, onBack: () -> Unit)
                     }
                     val subLabel = if (selectedSubIdx == -1) "Av" else subtitleTracks.getOrNull(selectedSubIdx)?.label ?: "Av"
                     NavPill("Text: $subLabel", false) {
-                        overlayBump++
+                        barTick++
                         val t = currentTracksObj ?: return@NavPill
                         if (subtitleTracks.isEmpty()) return@NavPill
                         val next = if (selectedSubIdx + 1 >= subtitleTracks.size) -1 else selectedSubIdx + 1; selectedSubIdx = next

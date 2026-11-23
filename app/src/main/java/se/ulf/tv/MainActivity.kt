@@ -75,6 +75,7 @@ fun ObsidianApp() {
     var showUnlockDialog by remember { mutableStateOf(false) }
 
     var catalog by remember { mutableStateOf(demoCatalog()) }
+    var catalogVersion by remember { mutableStateOf(1) }
     var currentSection by remember { mutableStateOf(NavSection.HOME) }
     var playingItem by remember { mutableStateOf<MediaEntry?>(null) }
     var statusText by remember { mutableStateOf("http://$localIp:8099/add") }
@@ -91,23 +92,27 @@ fun ObsidianApp() {
             statusText = "Synkar ($useFormat)..."
             try {
                 val loaded = withContext(Dispatchers.IO) {
-                    if (useMode == "XTREAM" && server.isNotBlank() && user.isNotBlank()) {
-                        fetchXtreamCatalog(server, user, pass, useFormat)
-                    } else if (url.isNotBlank()) {
-                        parseM3u(fetchText(applyPlaylistFormat(url.trim(), useFormat)), useFormat)
-                    } else {
-                        demoCatalog()
-                    }
+                    runCatching {
+                        if (useMode == "XTREAM" && server.isNotBlank() && user.isNotBlank()) {
+                            fetchXtreamCatalog(server, user, pass, useFormat)
+                        } else if (url.isNotBlank()) {
+                            parseM3u(fetchText(applyPlaylistFormat(url.trim(), useFormat)), useFormat)
+                        } else {
+                            demoCatalog()
+                        }
+                    }.getOrDefault(emptyList())
                 }
+                CoverImageCache.clearAndBump()
+                catalogVersion += 1
                 if (loaded.isNotEmpty()) {
                     catalog = loaded
                     statusText = "${loaded.count { it.type == MediaType.LIVE }} Live • ${loaded.count { it.type == MediaType.MOVIE }} Filmer • ${loaded.count { it.type == MediaType.SERIES }} Serier"
                 } else {
                     catalog = demoCatalog()
-                    statusText = "Demoläge • http://$localIp:8099/add"
+                    statusText = "Kunde inte nå källa – visar demo"
                 }
-            } catch (e: Exception) {
-                statusText = "Kunde inte ladda: ${e.message ?: "Kontrollera adressen"}"
+            } catch (_: Exception) {
+                statusText = "Kunde inte synka – visar demo"
             }
         }
     }
@@ -235,28 +240,30 @@ fun ObsidianApp() {
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            when (currentSection) {
-                NavSection.HOME -> NetflixPlexHomeView(visibleCatalog) { playingItem = it }
-                NavSection.LIVE -> LiveTvDropdownView(visibleCatalog.filter { it.type == MediaType.LIVE }) { playingItem = it }
-                NavSection.MOVIES -> CuratedMediaSectionView(
-                    items = visibleCatalog.filter { it.type == MediaType.MOVIE },
-                    emptyLabel = "Inga filmer hittades i spellistan.",
-                    isPoster = true,
-                    onPlay = { playingItem = it }
-                )
-                NavSection.SERIES -> CuratedMediaSectionView(
-                    items = visibleCatalog.filter { it.type == MediaType.SERIES },
-                    emptyLabel = "Inga serier hittades i spellistan.",
-                    isPoster = true,
-                    onPlay = { playingItem = it }
-                )
-                NavSection.SETTINGS -> SettingsView(
-                    localIp, mode, streamFormat, m3uUrl, xtServer, xtUser, xtPass, adultLockEnabled, adultPin, adultUnlocked,
-                    onRequestUnlockAdult = { showUnlockDialog = true },
-                    onLockAdultNow = { adultUnlocked = false },
-                    onBack = { currentSection = NavSection.HOME },
-                    onSave = ::saveAll
-                )
+            key(catalogVersion) {
+                when (currentSection) {
+                    NavSection.HOME -> NetflixPlexHomeView(visibleCatalog) { playingItem = it }
+                    NavSection.LIVE -> LiveTvDropdownView(visibleCatalog.filter { it.type == MediaType.LIVE }) { playingItem = it }
+                    NavSection.MOVIES -> CuratedMediaSectionView(
+                        items = visibleCatalog.filter { it.type == MediaType.MOVIE },
+                        emptyLabel = "Inga filmer hittades i spellistan.",
+                        isPoster = true,
+                        onPlay = { playingItem = it }
+                    )
+                    NavSection.SERIES -> CuratedMediaSectionView(
+                        items = visibleCatalog.filter { it.type == MediaType.SERIES },
+                        emptyLabel = "Inga serier hittades i spellistan.",
+                        isPoster = true,
+                        onPlay = { playingItem = it }
+                    )
+                    NavSection.SETTINGS -> SettingsView(
+                        localIp, mode, streamFormat, m3uUrl, xtServer, xtUser, xtPass, adultLockEnabled, adultPin, adultUnlocked,
+                        onRequestUnlockAdult = { showUnlockDialog = true },
+                        onLockAdultNow = { adultUnlocked = false },
+                        onBack = { currentSection = NavSection.HOME },
+                        onSave = ::saveAll
+                    )
+                }
             }
         }
 
@@ -269,9 +276,9 @@ fun ObsidianApp() {
 
 @Composable
 fun NetflixPlexHomeView(catalog: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
-    val movies = remember(catalog) { catalog.filter { it.type == MediaType.MOVIE }.take(18) }
-    val series = remember(catalog) { catalog.filter { it.type == MediaType.SERIES }.take(18) }
-    val live = remember(catalog) { catalog.filter { it.type == MediaType.LIVE }.take(18) }
+    val movies = remember(catalog) { catalog.filter { it.type == MediaType.MOVIE }.take(14) }
+    val series = remember(catalog) { catalog.filter { it.type == MediaType.SERIES }.take(14) }
+    val live = remember(catalog) { catalog.filter { it.type == MediaType.LIVE }.take(14) }
     val defaultHero = remember(catalog) {
         catalog.firstOrNull { it.imageUrl.isNotBlank() } ?: catalog.firstOrNull()
     }
@@ -315,18 +322,14 @@ fun CuratedMediaSectionView(
         mutableStateOf(items.firstOrNull { it.imageUrl.isNotBlank() } ?: items.first())
     }
 
-    val latestItems = remember(items) { items.take(16) }
-    val newestItems = remember(items) { items.takeLast(16).reversed() }
-    val ultraHdItems = remember(items) { items.filter { it.is4K }.take(16) }
+    val latestItems = remember(items) { items.take(14) }
+    val newestItems = remember(items) { items.takeLast(14).reversed() }
+    val ultraHdItems = remember(items) { items.filter { it.is4K }.take(14) }
     val byGenre = remember(items) {
-        items.groupBy { it.genre }.entries
-            .sortedByDescending { it.value.size }
-            .take(5)
+        items.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(5)
     }
     val byCountry = remember(items) {
-        items.groupBy { it.country }.entries
-            .sortedByDescending { it.value.size }
-            .take(5)
+        items.groupBy { it.country }.entries.sortedByDescending { it.value.size }.take(5)
     }
 
     Column(
@@ -343,23 +346,11 @@ fun CuratedMediaSectionView(
         }
 
         byGenre.forEach { (genreName, list) ->
-            MediaShelfRow(
-                title = "Genre • $genreName",
-                items = list.take(16),
-                isPoster = isPoster,
-                onSelectFocus = { activeHero = it },
-                onPlay = onPlay
-            )
+            MediaShelfRow("Genre • $genreName", list.take(14), isPoster = isPoster, onSelectFocus = { activeHero = it }, onPlay = onPlay)
         }
 
         byCountry.forEach { (countryName, list) ->
-            MediaShelfRow(
-                title = "Land • $countryName",
-                items = list.take(16),
-                isPoster = isPoster,
-                onSelectFocus = { activeHero = it },
-                onPlay = onPlay
-            )
+            MediaShelfRow("Land • $countryName", list.take(14), isPoster = isPoster, onSelectFocus = { activeHero = it }, onPlay = onPlay)
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -381,8 +372,7 @@ fun LiveTvDropdownView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
     }
     val subcategories = remember(items) {
         val found = items.map { it.genre }.distinct().sorted()
-        val merged = (defaultSubcategories + found).distinct()
-        listOf("Alla underkategorier") + merged
+        listOf("Alla underkategorier") + (defaultSubcategories + found).distinct()
     }
 
     var selectedCountry by remember(items) { mutableStateOf("Alla länder") }
@@ -401,14 +391,13 @@ fun LiveTvDropdownView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
     }
 
     val groupedBySub = remember(filtered) {
-        filtered.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(8)
+        filtered.groupBy { it.genre }.entries.sortedByDescending { it.value.size }.take(6)
     }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        // Rullgardiner för Land och Underkategori
         Row(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -506,7 +495,7 @@ fun LiveTvDropdownView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
                 } else {
                     "$selectedCountry • $selectedSubcategory (${filtered.size})"
                 },
-                items = filtered.take(24),
+                items = filtered.take(18),
                 isPoster = false,
                 onSelectFocus = {},
                 onPlay = onPlay
@@ -515,7 +504,7 @@ fun LiveTvDropdownView(items: List<MediaEntry>, onPlay: (MediaEntry) -> Unit) {
             groupedBySub.forEach { (subName, list) ->
                 MediaShelfRow(
                     title = subName,
-                    items = list.take(18),
+                    items = list.take(14),
                     isPoster = false,
                     onSelectFocus = {},
                     onPlay = onPlay
@@ -580,7 +569,7 @@ fun HeroShowcaseBanner(item: MediaEntry, onPlay: () -> Unit) {
             url = item.imageUrl,
             title = item.title,
             contentScale = ContentScale.Crop,
-            maxDimension = 960,
+            maxDimension = 640,
             modifier = Modifier.fillMaxSize()
         )
         Box(
@@ -730,7 +719,7 @@ fun NetflixPosterCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Uni
             url = item.imageUrl,
             title = item.title,
             contentScale = ContentScale.Crop,
-            maxDimension = 460,
+            maxDimension = 320,
             modifier = Modifier.fillMaxSize()
         )
         Box(
@@ -813,12 +802,12 @@ fun PlexLiveCard(item: MediaEntry, modifier: Modifier, onFocused: () -> Unit, on
                 url = item.imageUrl,
                 title = item.title,
                 contentScale = ContentScale.Fit,
-                maxDimension = 420,
+                maxDimension = 300,
                 fallbackBackdrop = false,
                 modifier = Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 46.dp)
             )
         } else {
-            AsyncCoverImage("", item.title, ContentScale.Crop, 420, Modifier.fillMaxSize(), true)
+            AsyncCoverImage("", item.title, ContentScale.Crop, 300, Modifier.fillMaxSize(), true)
         }
         Box(
             Modifier.fillMaxSize().background(
@@ -873,14 +862,17 @@ fun AsyncCoverImage(
     modifier: Modifier = Modifier,
     fallbackBackdrop: Boolean = true
 ) {
-    val cacheKey = "${url}_$maxDimension"
-    var bitmap by remember(cacheKey) { mutableStateOf(CoverImageCache.get(cacheKey)) }
+    val epoch = CoverImageCache.epoch
+    val cacheKey = "${epoch}_${url}_$maxDimension"
+    var bitmap by remember(cacheKey) { mutableStateOf(CoverImageCache.get("${url}_$maxDimension")) }
 
     LaunchedEffect(cacheKey) {
-        if (bitmap == null && (url.startsWith("http://", true) || url.startsWith("https://", true))) {
-            val loaded = withContext(Dispatchers.IO) { loadScaledBitmap(url, maxDimension) }
+        if (bitmap == null && url.isNotBlank()) {
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching { loadScaledBitmap(url, maxDimension) }.getOrNull()
+            }
             if (loaded != null) {
-                CoverImageCache.put(cacheKey, loaded)
+                CoverImageCache.put("${url}_$maxDimension", loaded)
                 bitmap = loaded
             }
         }

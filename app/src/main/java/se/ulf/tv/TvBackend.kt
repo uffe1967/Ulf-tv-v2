@@ -638,7 +638,9 @@ fun demoCatalog(): List<MediaEntry> = listOf(
     MediaEntry("6", "Nyheter Live HD", "Sverige", "Nyheter", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg", is4K = false, orderIndex = 5),
     MediaEntry("7", "Arena Sport 4K", "Sverige", "Sport", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerFun.jpg", is4K = true, orderIndex = 6),
     MediaEntry("8", "Night Session Musik", "UK", "Musik", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4", MediaType.LIVE, false, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerJoy.jpg", is4K = false, orderIndex = 7)
-) data class SeriesEpisode(
+) 
+
+data class SeriesEpisode(
     val id: String,
     val season: Int,
     val episodeNum: Int,
@@ -671,7 +673,8 @@ fun fetchXtreamSeriesEpisodes(
         val list = result.getOrPut(seasonNum) { mutableListOf() }
         for (i in 0 until arr.length()) {
             val ep = arr.optJSONObject(i) ?: continue
-            val epId = ep.optString("id").ifBlank { continue }
+            val epId = ep.optString("id")
+            if (epId.isBlank()) continue
             val ext = ep.optString("container_extension", "mp4").ifBlank { "mp4" }
             val epNum = ep.optString("episode_num").toIntOrNull() ?: (i + 1)
             val epTitle = ep.optString("title", "Avsnitt $epNum").trim().ifBlank { "Avsnitt $epNum" }
@@ -722,3 +725,5 @@ fun buildM3uSeriesEpisodes(seriesTitle: String, allSeriesItems: List<MediaEntry>
     result.values.forEach { list -> list.sortBy { it.episodeNum } }
     return result
 }
+
+
